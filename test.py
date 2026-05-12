@@ -192,13 +192,13 @@ if __name__ == '__main__':
     print("开始提取测试集序列特征...")
     print("=" * 60)
     extractor_seq = ProteinEmbeddingExtractor()
-    extractor_seq.process_file("dataset/test.csv","embedding/seq_test_embeddings.npy","embedding/seq_test_attention_masks.npy")
+    extractor_seq.process_file("dataset_test/test.csv","embedding/seq_test_embeddings.npy","embedding/seq_test_attention_masks.npy")
     
     print("\n" + "=" * 60)
     print("开始提取测试集图像特征...")
     print("=" * 60)
     extractor_img = ViTFeatureExtractorModel()
-    extractor_img.extract_features_for_all("dataset/test.csv", "dataset/test", "embedding/test_vitembeddings.npy")
+    extractor_img.extract_features_for_all("dataset_test/test.csv", "dataset_test/test", "embedding/test_vitembeddings.npy")
 
 
     atexit.register(_restore_and_close)
@@ -255,7 +255,7 @@ if __name__ == '__main__':
     print(f"使用的阈值: {threshold}")
     # 如果有测试集标签，可以加载标签数据
     try:
-        label_df = pd.read_csv("dataset/test.csv")
+        label_df = pd.read_csv("dataset_test/test.csv")
         label_columns = [2, 3, 4, 5, 6]  # 对应的标签列
         labels = label_df.iloc[:, label_columns].values
         labels = torch.tensor(labels, dtype=torch.float32)
@@ -264,6 +264,33 @@ if __name__ == '__main__':
         print("没有找到标签文件，将不会计算测试集的 F1 分数。")
         labels = None
         has_labels = False
+
+    # 打印数据形状以检查一致性
+    print(f"\n数据形状检查:")
+    print(f"seq_features shape: {seq_features.shape}")
+    print(f"attention_masks shape: {attention_masks.shape}")
+    print(f"img_features shape: {img_features.shape}")
+    if has_labels:
+        print(f"labels shape: {labels.shape}")
+
+    # 检查样本数量是否一致
+    num_seq = seq_features.shape[0]
+    num_attn = attention_masks.shape[0]
+    num_img = img_features.shape[0]
+
+    if has_labels:
+        num_labels = labels.shape[0]
+        if not (num_seq == num_attn == num_img == num_labels):
+            print(f"\n错误：数据样本数量不一致！")
+            print(f"序列特征: {num_seq}, 注意力掩码: {num_attn}, 图像特征: {num_img}, 标签: {num_labels}")
+            sys.exit(1)
+    else:
+        if not (num_seq == num_attn == num_img):
+            print(f"\n错误：数据样本数量不一致！")
+            print(f"序列特征: {num_seq}, 注意力掩码: {num_attn}, 图像特征: {num_img}")
+            sys.exit(1)
+
+    print(f"数据一致性检查通过，共 {num_seq} 个样本\n")
 
     # 将 NumPy 数组转换为 PyTorch 张量
     seq_features = torch.tensor(seq_features, dtype=torch.float32)

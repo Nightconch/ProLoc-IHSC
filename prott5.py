@@ -12,8 +12,8 @@ class ProteinEmbeddingExtractor:
         self.batch_size = batch_size
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-        # 加载分词器和模型
-        self.tokenizer = T5Tokenizer.from_pretrained(model_path, do_lower_case=False)
+        # 加载分词器和模型（设置legacy=False以消除警告）
+        self.tokenizer = T5Tokenizer.from_pretrained(model_path, do_lower_case=False, legacy=False)
         self.model = T5EncoderModel.from_pretrained(model_path)
 
         # 将模型移动到当前进程的GPU上
@@ -90,7 +90,7 @@ class ProteinEmbeddingExtractor:
         return output_embeddings_filename, output_masks_filename
 
 if __name__ == "__main__":
+    # extractor_seq = ProteinEmbeddingExtractor()
+    # extractor_seq.process_file("test.csv", "seq_test_embeddings_prot5.npy", "seq_test_attention_masks_prot5.npy")
     extractor_seq = ProteinEmbeddingExtractor()
-    extractor_seq.process_file("dataset/test.csv", "embedding/seq_test_embeddings.npy", "embedding/seq_test_attention_masks.npy")
-    extractor_seq = ProteinEmbeddingExtractor()
-    extractor_seq.process_file("dataset/train.csv", "embedding/seq_train_embeddings.npy", "embedding/seq_train_attention_masks.npy")
+    extractor_seq.process_file("train.csv", "seq_train_embeddings_prot5.npy", "seq_train_attention_masks_prot5.npy")

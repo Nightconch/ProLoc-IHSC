@@ -1,0 +1,7 @@
+image,sequence_file,pred_cytoplasm,pred_endoplasmic_reticulum,pred_mitochondria,pred_nucleus,pred_plasma_membrane
+ENSG00000005020-15519_B_7_7-HPA005560-nucleoplasm;cytosol.jpg,ENSG00000005020-15519_B_7_7-HPA005560-nucleoplasm;cytosol.fasta,1,0,0,0,0
+ENSG00000005020-15519_B_7_8-HPA005560-nucleoplasm;cytosol.jpg,ENSG00000005020-15519_B_7_8-HPA005560-nucleoplasm;cytosol.fasta,1,0,0,0,0
+ENSG00000005020-15519_B_8_7-HPA005560-nucleoplasm;cytosol.jpg,ENSG00000005020-15519_B_8_7-HPA005560-nucleoplasm;cytosol.fasta,1,0,0,0,1
+ENSG00000005020-15519_B_8_8-HPA005560-nucleoplasm;cytosol.jpg,ENSG00000005020-15519_B_8_8-HPA005560-nucleoplasm;cytosol.fasta,1,0,0,0,0
+ENSG00000005020-15519_B_9_7-HPA005560-nucleoplasm;cytosol.jpg,ENSG00000005020-15519_B_9_7-HPA005560-nucleoplasm;cytosol.fasta,1,0,0,0,0
+ENSG00000005020-15519_B_9_8-HPA005560-nucleoplasm;cytosol.jpg,ENSG00000005020-15519_B_9_8-HPA005560-nucleoplasm;cytosol.fasta,1,0,0,0,1

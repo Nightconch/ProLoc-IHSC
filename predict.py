@@ -311,9 +311,9 @@ class ProteinLocalizationPredictor:
 def main():
     parser = argparse.ArgumentParser(description='蛋白质亚细胞定位预测')
     parser.add_argument('--model', type=str, required=True, help='模型权重文件路径')
-    parser.add_argument('--input', type=str, required=True,
-                        help='输入路径：单个图像文件、单个序列文件、或包含图像和CSV的文件夹')
-    parser.add_argument('--sequence', type=str, help='序列文件路径或序列字符串（单文件模式）')
+    parser.add_argument('--ihc', type=str, required=True,
+                        help='单个图像文件或包含图像的文件夹')
+    parser.add_argument('--sequence', type=str, help='单个序列文件或包含序列的文件夹')
     parser.add_argument('--output', type=str, help='输出CSV文件路径（批量模式，可选，默认为predictions.csv）')
 
     args = parser.parse_args()
@@ -328,7 +328,7 @@ def main():
     )
 
     # 自动识别模式
-    input_path = args.input
+    input_path = args.ihc
 
     # 判断输入是文件还是文件夹
     if os.path.isfile(input_path):

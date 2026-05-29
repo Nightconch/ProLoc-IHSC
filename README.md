@@ -155,17 +155,6 @@ python predict.py \
     --output results/batch_predictions.csv
 ```
 
-#### Mode 3: Batch Prediction from CSV
-
-Predict from a CSV file containing image names and sequences:
-
-```bash
-python predict.py \
-    --model results/best_model.pth \
-    --ihc path/to/dataset_folder/ \
-    --output predictions.csv
-```
-
 ### Output Format
 
 All prediction results are saved as CSV files with the following columns:

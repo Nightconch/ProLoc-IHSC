@@ -100,7 +100,6 @@ Predict subcellular localization for a single protein:
 
 ```bash
 python predict.py \
-    --model results/best_model.pth \
     --ihc path/to/image.jpg \
     --sequence path/to/sequence.fasta \
     --output results/prediction.csv
@@ -110,7 +109,6 @@ python predict.py \
 
 ```bash
 python predict.py \
-    --model results/best_model.pth \
     --ihc predict/ENSG00000005020-15519_B_7_7-HPA005560-nucleoplasm;cytosol.jpg \
     --sequence predict/ENSG00000005020-15519_B_7_7-HPA005560-nucleoplasm;cytosol.fasta \
     --output results/single_prediction.csv
@@ -123,7 +121,6 @@ Predict multiple proteins with images and sequences in separate folders:
 
 ```bash
 python predict.py \
-    --model results/best_model.pth \
     --ihc path/to/images/ \
     --sequence path/to/sequences/ \
     --output predictions.csv
@@ -149,21 +146,9 @@ predict/
 
 ```bash
 python predict.py \
-    --model results/best_model.pth \
     --ihc predict/images/ \
     --sequence predict/sequences/ \
     --output results/batch_predictions.csv
-```
-
-#### Mode 3: Batch Prediction from CSV
-
-Predict from a CSV file containing image names and sequences:
-
-```bash
-python predict.py \
-    --model results/best_model.pth \
-    --ihc path/to/dataset_folder/ \
-    --output predictions.csv
 ```
 
 ### Output Format

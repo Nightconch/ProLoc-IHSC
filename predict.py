@@ -310,7 +310,7 @@ class ProteinLocalizationPredictor:
 
 def main():
     parser = argparse.ArgumentParser(description='蛋白质亚细胞定位预测')
-    parser.add_argument('--model', type=str, required=True, help='模型权重文件路径')
+    parser.add_argument('--model', type=str, default='results/best_model.pth', help='模型权重文件路径')
     parser.add_argument('--ihc', type=str, required=True,
                         help='单个图像文件或包含图像的文件夹')
     parser.add_argument('--sequence', type=str, help='单个序列文件或包含序列的文件夹')

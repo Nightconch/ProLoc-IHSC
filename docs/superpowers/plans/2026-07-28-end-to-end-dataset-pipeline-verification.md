@@ -32,7 +32,7 @@
 - Consumes: `supplemental_quality_manifests.main(argv, source_urls=..., source_md5=..., sequence_resolver=...)` and `download.main(argv, http_get=...)`.
 - Produces: `DatasetPipelineEndToEndTest.test_two_cli_pipeline_is_deterministic_and_contract_complete`.
 
-- [ ] **Step 1: Build independent fixture primitives**
+- [x] **Step 1: Build independent fixture primitives**
 
 Create literal source rows containing every required source column. The official train rows use source IDs `[20, 10]`, the official test row uses `[30]`, supplemental known rows inherit both official sides, and ten unknown proteins make the 10% deterministic split observable. Give two different known proteins on opposite sides the same antibody/image pair so their generated `Modified URL` values are equal.
 
@@ -46,7 +46,7 @@ def fixture_sequence_resolver(protein_ids, _cache_path):
 
 Build controlled payloads for RGB JPEG, grayscale PNG, RGBA PNG with transparent pixels, an all-white PNG, invalid bytes, and HTTP 503.
 
-- [ ] **Step 2: Add the end-to-end test through both public mains**
+- [x] **Step 2: Add the end-to-end test through both public mains**
 
 For each of two independent temporary run roots, invoke:
 
@@ -67,7 +67,7 @@ download_code = downloader.main(
 
 Do not invoke `generate_quality_manifests`, `run_download_pipeline`, or a private helper to perform either stage.
 
-- [ ] **Step 3: Assert public artifacts and policies**
+- [x] **Step 3: Assert public artifacts and policies**
 
 Assert literal expectations:
 
@@ -80,11 +80,11 @@ self.assertEqual(train_protein_ids & test_protein_ids, set())
 
 Also assert that the supplemental HQ row is in MQ, the shared URL remains once on each split for different proteins, blank/HTTP/corrupt MQ/LQ rows are absent from formal CSVs and present in `download_failures.csv`, every successful file is listed exactly once, and Pillow reopens every success as JPEG/RGB/three-band.
 
-- [ ] **Step 4: Assert repeatability**
+- [x] **Step 4: Assert repeatability**
 
 Compare the two runs' six manifest byte sequences, six formal CSV byte sequences, per-dataset ordered filename lists, `manifest_generation_report.json`, and `download_audit_report.json`. HTTP completion order is irrelevant; formal order must remain source order.
 
-- [ ] **Step 5: Run the focused test**
+- [x] **Step 5: Run the focused test**
 
 Run:
 
@@ -107,7 +107,7 @@ Expected: `OK`; if it fails, the failure must identify a real public contract ga
 - Consumes: both script files as actual subprocess entry points for `--help`, manifest `main` for an injected source failure, and downloader script for a missing-manifest failure.
 - Produces: tests that prove help returns zero and failures return nonzero while writing a deterministic report under the requested output directory.
 
-- [ ] **Step 1: Add help contract tests**
+- [x] **Step 1: Add help contract tests**
 
 Run each script with `sys.executable` and `--help`. Assert return code `0`, empty network activity by construction, and the documented arguments:
 
@@ -116,15 +116,15 @@ manifest_help = {"--output-dir", "--cache-dir", "--seed"}
 download_help = {"--manifest-dir", "--output-dir", "--workers"}
 ```
 
-- [ ] **Step 2: Add manifest failure diagnostics**
+- [x] **Step 2: Add manifest failure diagnostics**
 
 Use fixture official train/test frames with the same trimmed Protein Id on both sides. Invoke the public manifest `main`; assert return code `1`, stderr JSON with `status=error`, and `manifest_generation_report.json` plus `manifest_failures.csv` in the requested output directory.
 
-- [ ] **Step 3: Add downloader process failure diagnostics**
+- [x] **Step 3: Add downloader process failure diagnostics**
 
 Run the downloader script against a temporary manifest directory missing one formal manifest. Assert a nonzero process return code and inspect `<output-dir>/download_audit_report.json` for `status=error`, `published=false`, and an error message naming the missing artifact. No HTTP boundary is reached.
 
-- [ ] **Step 4: Run the complete acceptance module**
+- [x] **Step 4: Run the complete acceptance module**
 
 ```powershell
 rtk python -m unittest dataset.download.test_dataset_pipeline_e2e -v
@@ -147,7 +147,7 @@ Expected: every acceptance test passes. If production error handling changes, fi
 - Consumes: the approved specification and all dataset-download tests.
 - Produces: no active test expectation that prefers one quality tier for a shared URL, requires URL cross-tier exclusivity, or reconstructs official HQ from the supplemental source.
 
-- [ ] **Step 1: Search only source and test files for obsolete contracts**
+- [x] **Step 1: Search only source and test files for obsolete contracts**
 
 ```powershell
 rtk rg -n -g "*.py" "resolve_url_quality_conflicts|overlapping URLs|cross_tier_conflict|duplicate_url_rows_removed|compare_hq|existing HQ" dataset/download
@@ -156,7 +156,7 @@ rtk rg -n -g "*.py" "TODO|TBD|FIXME|HACK" dataset/download
 
 Classify every match. Delete or replace only tests that require superseded behavior; do not weaken the formal shared-URL assertions in the official/supplemental/downloader tests.
 
-- [ ] **Step 2: Run all dataset tests after cleanup**
+- [x] **Step 2: Run all dataset tests after cleanup**
 
 ```powershell
 rtk python -m unittest discover -s dataset/download -p "test_*.py" -v
@@ -164,7 +164,7 @@ rtk python -m unittest discover -s dataset/download -p "test_*.py" -v
 
 Expected: all discovered tests pass, including the new acceptance module.
 
-- [ ] **Step 3: Compile all dataset-download Python files**
+- [x] **Step 3: Compile all dataset-download Python files**
 
 ```powershell
 rtk python -m compileall -q dataset/download
@@ -211,7 +211,7 @@ rtk git -c safe.directory=E:/work/ProLoc-IHCS commit -m "test: verify dataset pi
 
 Add a production module to the staged list only if Task 2 proved and fixed a public contract gap. Do not stage unrelated dirty paths.
 
-- [ ] **Step 4: Review from the fixed base**
+- [x] **Step 4: Review from the fixed base**
 
 Invoke the repository `code-review` skill with fixed point `085c729687c157b0c5a373d5f5284a4a731b40ed`, ticket 07, and the approved specification. Repair every blocking ticket-scoped finding, rerun Task 4 Step 1, and commit any review fix separately.
 
@@ -233,7 +233,7 @@ Expected: no ticket-owned file remains uncommitted, every pre-existing dirty pat
   user-maintained Python environment lacks `torch` for importing `train.py`.
   No dependency installation or training-code change was made.  Ticket 07
   remains `ready-for-agent`, and Task 4 Step 2 remains unchecked.
-- Evidence/status was committed in `119c5d5`; the fixed-base review for the
-  resulting documentation fix remains pending at this execution point (Task 4
-  Step 4 stays unchecked).  Do not claim ticket closure until both blockers are
-  resolved and independently verified.
+- Evidence/status was committed in `119c5d5`; the fixed-base review is complete,
+  and its actionable in-repository finding (stale execution checkboxes in this
+  plan) is resolved by this follow-up status update.  Do not claim ticket closure
+  until the root-suite environment blocker is resolved and independently verified.

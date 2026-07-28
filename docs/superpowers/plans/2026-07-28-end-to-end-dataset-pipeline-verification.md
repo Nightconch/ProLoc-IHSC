@@ -184,7 +184,7 @@ Expected: exit code `0` with no syntax error.
 - Consumes: fresh test, compile, CLI, audit, Git-scope, and review evidence.
 - Produces: ticket 07 marked `done`, scoped commits, and a fixed-base standards/spec review with no blocking findings.
 
-- [ ] **Step 1: Run final applicable verification**
+- [x] **Step 1: Run final applicable verification**
 
 ```powershell
 rtk python -m unittest discover -s dataset/download -p "test_*.py" -v
@@ -201,7 +201,7 @@ Record exact counts and any environment-only downstream failure. Do not install 
 
 Change only ticket 07 from `ready-for-agent` to `done` and its eight checklist markers from `[ ]` to `[x]` once every ticket-scoped requirement is satisfied. If the downstream environment failure prevents an honest checkbox, leave the affected item open and report it.
 
-- [ ] **Step 3: Stage and commit ticket-owned changes**
+- [x] **Step 3: Stage and commit ticket-owned changes**
 
 ```powershell
 rtk git -c safe.directory=E:/work/ProLoc-IHCS add -- dataset/download/test_dataset_pipeline_e2e.py docs/superpowers/plans/2026-07-28-end-to-end-dataset-pipeline-verification.md .scratch/official-hq-rgb-dataset/issues/07-verify-end-to-end-dataset-pipeline.md
@@ -215,7 +215,7 @@ Add a production module to the staged list only if Task 2 proved and fixed a pub
 
 Invoke the repository `code-review` skill with fixed point `085c729687c157b0c5a373d5f5284a4a731b40ed`, ticket 07, and the approved specification. Repair every blocking ticket-scoped finding, rerun Task 4 Step 1, and commit any review fix separately.
 
-- [ ] **Step 5: Inspect final scope**
+- [x] **Step 5: Inspect final scope**
 
 ```powershell
 rtk git -c safe.directory=E:/work/ProLoc-IHCS status --short
@@ -223,3 +223,17 @@ rtk git -c safe.directory=E:/work/ProLoc-IHCS log -5 --oneline
 ```
 
 Expected: no ticket-owned file remains uncommitted, every pre-existing dirty path remains otherwise preserved, and no push or production download occurred.
+
+#### Execution status (2026-07-28)
+
+- The dataset-download suite passed all 118 tests.  Compilation, both public
+  CLI `--help` commands, whitespace checks, and obsolete-contract/TODO audits
+  also passed; the controlled fixtures made no real downloads.
+- The root `tests` suite is blocked before collection completes because the
+  user-maintained Python environment lacks `torch` for importing `train.py`.
+  No dependency installation or training-code change was made.  Ticket 07
+  remains `ready-for-agent`, and Task 4 Step 2 remains unchecked.
+- Evidence/status was committed in `119c5d5`; the fixed-base review for the
+  resulting documentation fix remains pending at this execution point (Task 4
+  Step 4 stays unchecked).  Do not claim ticket closure until both blockers are
+  resolved and independently verified.

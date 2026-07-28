@@ -1,12 +1,15 @@
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 import pandas as pd
 from PIL import Image
@@ -140,6 +143,31 @@ class FixtureResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+class SentinelRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.server.request_count += 1
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+@contextmanager
+def sentinel_http_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SentinelRequestHandler)
+    server.request_count = 0
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
 def image_payload(mode, color, image_format="PNG"):
     image = Image.new(mode, (8, 6), color)
     output = io.BytesIO()
@@ -265,6 +293,21 @@ def fixture_sequence_resolver(protein_ids, _cache_path):
     return ({protein_id: f"SEQUENCE_{protein_id}" for protein_id in normalized}, set())
 
 
+def downloader_manifest_row(url, protein_id):
+    row = {column: 0 for column in REQUIRED_DOWNLOAD_LABEL_COLUMNS}
+    row.update(
+        {
+            "Modified URL": url,
+            "Protein Id": protein_id,
+            "Antibody Id": "HPA000123",
+            "locations": "nucleus",
+            "nucleus": 1,
+            "Sequence": f"SEQUENCE_{protein_id}",
+        }
+    )
+    return row
+
+
 def controlled_http_get(url, timeout):
     if timeout != 60:
         raise AssertionError(f"unexpected timeout: {timeout}")
@@ -367,27 +410,46 @@ class DatasetPipelineEndToEndTest(unittest.TestCase):
             manifest_dir = root / "manifests"
             output_dir = root / "download-output"
             manifest_dir.mkdir()
-            for tier, split in DATASETS[1:]:
-                pd.DataFrame(columns=downloader.REQUIRED_MANIFEST_COLUMNS).to_csv(
-                    manifest_dir / f"{tier}_{split}_img_URL.csv", index=False
+            with sentinel_http_server() as server:
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                for index, (tier, split) in enumerate(DATASETS[:-1]):
+                    frame = pd.DataFrame(
+                        [
+                            downloader_manifest_row(
+                                f"{base_url}/fixture-{index}.jpg",
+                                f"P_FIXTURE_{index}",
+                            )
+                        ],
+                        columns=downloader.REQUIRED_MANIFEST_COLUMNS,
+                    )
+                    frame.to_csv(
+                        manifest_dir / f"{tier}_{split}_img_URL.csv",
+                        index=False,
+                    )
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(downloader.__file__)),
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "1",
+                    ],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env={
+                        **os.environ,
+                        "NO_PROXY": "127.0.0.1,localhost",
+                        "no_proxy": "127.0.0.1,localhost",
+                    },
                 )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(Path(downloader.__file__)),
-                    "--manifest-dir",
-                    str(manifest_dir),
-                    "--output-dir",
-                    str(output_dir),
-                    "--workers",
-                    "1",
-                ],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+                self.assertEqual(server.request_count, 0)
 
             self.assertNotEqual(result.returncode, 0)
             audit_report = json.loads(
@@ -398,7 +460,7 @@ class DatasetPipelineEndToEndTest(unittest.TestCase):
             self.assertEqual(audit_report["status"], "error")
             self.assertFalse(audit_report["published"])
             self.assertIn(
-                "HQ_train_img_URL.csv", audit_report["error"]["message"]
+                "LQ_test_img_URL.csv", audit_report["error"]["message"]
             )
 
     def run_pipeline(self, root):

@@ -1,78 +1,94 @@
-import os
-import requests
-import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
+from pathlib import Path
 
-# 下载图片的函数
-def download_image(protein_id, image_url, HPA,location, output_dir):
-    # 从URL中提取图像文件名并去除最后的 .jpg 部分
-    image_name_part = image_url.split('/')[-1].replace('.jpg', '')
-    # 构建新的图像名称
-    new_image_name = f"{protein_id}-{image_name_part}-{HPA}-{location}.jpg"
-    # 构建图像保存路径
-    image_path = os.path.join(output_dir, new_image_name)
+from PIL import Image
 
+
+class ImageValidationError(ValueError):
+    pass
+
+
+def is_blank_rgb(image: Image.Image, threshold: int = 250) -> bool:
+    if image.mode != "RGB" or len(image.getbands()) != 3:
+        raise ValueError("blank detection requires an RGB three-band image")
+    return all(low >= threshold for low, _high in image.getextrema())
+
+
+def _validate_jpeg_rgb(source, stage: str) -> None:
     try:
-        response = requests.get(image_url, stream=True, timeout=10)
-        if response.status_code == 200:
-            with open(image_path, 'wb') as file:
-                for chunk in response.iter_content(1024):
-                    file.write(chunk)
-            return f"下载成功: {new_image_name}"
-        else:
-            return f"下载失败: {protein_id}, URL: {image_url}"
-    except Exception as e:
-        return f"下载出错: {protein_id}, URL: {image_url}, 错误: {e}"
+        with Image.open(source) as checked:
+            checked.load()
+            if (
+                checked.format != "JPEG"
+                or checked.mode != "RGB"
+                or len(checked.getbands()) != 3
+            ):
+                raise ImageValidationError(
+                    f"{stage} image is not JPEG RGB with three bands"
+                )
+            if is_blank_rgb(checked):
+                raise ImageValidationError(f"{stage} image is blank")
+    except ImageValidationError:
+        raise
+    except Exception as error:
+        raise ImageValidationError(
+            f"{stage} image decode failed: {error}"
+        ) from error
 
-# 加载数据
-data = pd.read_csv('test_img_URL.csv')
 
-# 创建保存图像的主目录
-output_dir = '../test'
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+def normalized_jpeg_bytes(payload: bytes) -> tuple[bytes, bool]:
+    try:
+        with Image.open(io.BytesIO(payload)) as source:
+            source.load()
+            preserves_original = (
+                source.format == "JPEG"
+                and source.mode == "RGB"
+                and len(source.getbands()) == 3
+            )
+            if preserves_original:
+                rgb = source
+            elif (
+                "A" in source.getbands()
+                or "transparency" in source.info
+            ):
+                rgba = source.convert("RGBA")
+                background = Image.new(
+                    "RGBA", rgba.size, (255, 255, 255, 255)
+                )
+                background.alpha_composite(rgba)
+                rgb = background.convert("RGB")
+            else:
+                rgb = source.convert("RGB")
+            if is_blank_rgb(rgb):
+                raise ImageValidationError("blank image")
+            if preserves_original:
+                candidate = payload
+                converted = False
+            else:
+                output = io.BytesIO()
+                rgb.save(output, format="JPEG", quality=95)
+                candidate = output.getvalue()
+                converted = True
+    except ImageValidationError:
+        raise
+    except Exception as error:
+        raise ImageValidationError(f"image decode failed: {error}") from error
 
-# 使用线程池加速下载
-failed_downloads = []
-successful_downloads = []  # 存储成功下载的记录
-download_records = []  # 存储下载记录，用于生成新表格
-max_workers = 8  # 设置最大线程数，根据系统资源进行调整
+    _validate_jpeg_rgb(io.BytesIO(candidate), "final")
 
-with ThreadPoolExecutor(max_workers=max_workers) as executor:
-    futures = []
-    for index, row in data.iterrows():
-        protein_id = row['ProteinId']  # 使用Protein Id作为文件名的一部分
-        # image_url = row.iloc[-1]  # 使用最后一列的URL
-        image_url = row['URL']  # 使用最后一列的URL
-        location = row['locations']  # locations列
-        HPA = row['AntibodyId']
+    return candidate, converted
 
-        # 提交下载任务
-        futures.append(executor.submit(download_image, protein_id, image_url,HPA, location, output_dir))
 
-    # 收集下载结果
-    for future in as_completed(futures):
-        result = future.result()
-        print(result)
-        if "下载成功" in result:
-            successful_downloads.append(result)
-            # 从结果提取文件名、locations和URL信息
-            file_name = result.split(": ")[1]
-            download_records.append([file_name, location, image_url])
-        elif "下载失败" in result or "下载出错" in result:
-            failed_downloads.append(result)
-
-# 下载完成后，打印出下载失败的记录
-if failed_downloads:
-    print("\n以下图像下载失败:")
-    for failure in failed_downloads:
-        print(failure)
-else:
-    print("所有图像下载成功")
-
-# 打印成功下载的图片数量
-print(f"\n成功下载的图片数量: {len(successful_downloads)}")
-
-download_df = pd.DataFrame(download_records, columns=['File Name', 'locations', 'URL'])
-download_df.to_csv('test_download.csv', index=False)
-print("下载记录已保存到 'download_records.csv'")
+def write_validated_image(payload: bytes, path: Path) -> bool:
+    path = Path(path)
+    candidate, converted = normalized_jpeg_bytes(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part_path = path.with_name(f"{path.name}.part")
+    part_path.unlink(missing_ok=True)
+    try:
+        part_path.write_bytes(candidate)
+        _validate_jpeg_rgb(part_path, "written")
+        part_path.replace(path)
+        return converted
+    finally:
+        part_path.unlink(missing_ok=True)

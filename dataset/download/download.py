@@ -442,7 +442,8 @@ def write_validated_image(payload: bytes, path: Path) -> bool:
     part_path.unlink(missing_ok=True)
     try:
         part_path.write_bytes(candidate)
-        _validate_nonblank_jpeg_rgb(part_path, "written")
+        with part_path.open("rb") as staged_file:
+            _validate_nonblank_jpeg_rgb(staged_file, "written")
         part_path.replace(path)
         return converted
     finally:

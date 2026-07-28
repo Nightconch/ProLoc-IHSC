@@ -299,6 +299,61 @@ class DownloadRowTest(unittest.TestCase):
             self.assertEqual(result.row, row)
             self.assertEqual(image_dir.read_bytes(), b"obstruction")
 
+    def test_download_task_classifies_staged_file_open_failure_as_write(self):
+        row = manifest_row()
+        task = download.DownloadTask(8, "MQ", "train", row)
+        payload = image_bytes("RGB", (10, 20, 30), "JPEG")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_dir = Path(temp_dir)
+            image_path = image_dir / "ENSG1-a-HPA000123-nucleus.jpg"
+            path_type = type(image_path)
+            original_path_open = path_type.open
+            original_image_open = download.Image.open
+
+            def fail_staged_path_open(
+                path,
+                mode="r",
+                buffering=-1,
+                encoding=None,
+                errors=None,
+                newline=None,
+            ):
+                if mode == "rb" and path.name.endswith(".part"):
+                    raise OSError("disk read failed")
+                return original_path_open(
+                    path, mode, buffering, encoding, errors, newline
+                )
+
+            def fail_pillow_path_open(source, mode="r", formats=None):
+                if isinstance(source, Path):
+                    raise OSError("disk read failed")
+                return original_image_open(source, mode, formats)
+
+            with patch.object(
+                path_type,
+                "open",
+                autospec=True,
+                side_effect=fail_staged_path_open,
+            ), patch.object(
+                download.Image,
+                "open",
+                side_effect=fail_pillow_path_open,
+            ):
+                result = download.download_task(
+                    task,
+                    image_dir,
+                    lambda _url, timeout: FakeResponse(payload),
+                )
+
+            self.assertFalse(result.success)
+            self.assertEqual(result.stage, "write")
+            self.assertIn("disk read failed", result.reason)
+            self.assertEqual(result.ordinal, 8)
+            self.assertEqual(result.row, row)
+            self.assertFalse(image_path.exists())
+            self.assertFalse(image_path.with_name(f"{image_path.name}.part").exists())
+
 
 class ManifestPreflightTest(unittest.TestCase):
     def test_process_manifest_rejects_blank_or_missing_values_before_http(self):

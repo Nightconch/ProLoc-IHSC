@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from dataset.download import filter_quality_urls as source_module
 from dataset.download import supplemental_quality_manifests as manifests
 from dataset.download.official_hq_manifests import (
     DOWNLOAD_LABEL_COLUMNS,
@@ -568,6 +567,14 @@ class SupplementalManifestCliTest(unittest.TestCase):
             )
             self.assertEqual(report["status"], "ok")
             self.assertTrue(report["published"])
+            self.assertEqual(report["source_validation"]["status"], "ok")
+            self.assertEqual(
+                report["source_validation"]["official_source_rows"], 3
+            )
+            self.assertEqual(
+                set(report["source_validation"]["sources"]),
+                {"normalLabeled.csv", "data_train.csv", "data_test.csv"},
+            )
             self.assertEqual(report["protein_id_overlap"], 0)
             self.assertEqual(report["split"]["unknown_proteins"], 12)
             self.assertEqual(report["split"]["unknown_test_proteins"], 1)
@@ -618,9 +625,22 @@ class SupplementalManifestCliTest(unittest.TestCase):
             )
             self.assertEqual(report["status"], "error")
             self.assertFalse(report["published"])
-            failures = pd.read_csv(output_dir / "manifest_failures.csv")
+            failures = pd.read_csv(
+                output_dir / "manifest_failures.csv"
+            ).fillna("")
             official_failures = failures.loc[failures["tier"].eq("HQ")]
             self.assertIn("P_HQ_A", set(official_failures["Protein Id"]))
+            observed_failures = {
+                (str(row["source_row"]), row["stage"], row["Protein Id"])
+                for row in failures.to_dict("records")
+            }
+            self.assertTrue(
+                {
+                    ("210", "sequence", "P_UNRESOLVED"),
+                    ("220", "protein_id", ""),
+                    ("230", "image_fields", "P_BAD_IMAGE"),
+                }.issubset(observed_failures)
+            )
             self.assertIn('"status": "error"', stderr.getvalue())
 
 

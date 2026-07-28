@@ -20,6 +20,7 @@ if __package__:
         SOURCE_URLS,
         ZENODO_RECORD_ID,
         _clean_text,
+        _require_columns,
         _source_row_identity,
         _write_csv_atomic,
         _write_json_atomic,
@@ -42,6 +43,7 @@ else:
         SOURCE_URLS,
         ZENODO_RECORD_ID,
         _clean_text,
+        _require_columns,
         _source_row_identity,
         _write_csv_atomic,
         _write_json_atomic,
@@ -89,14 +91,6 @@ class ManifestGenerationError(ValueError):
     def __init__(self, message, failures):
         super().__init__(message)
         self.failures = list(failures)
-
-
-def _require_columns(frame, columns, source_name):
-    missing = [column for column in columns if column not in frame.columns]
-    if missing:
-        raise ValueError(
-            f"{source_name} missing required columns: {', '.join(missing)}"
-        )
 
 
 def split_quality_values(value):
@@ -372,28 +366,19 @@ def _manifest_rows(frame, sequences, source_name):
     return result.loc[:, OUTPUT_COLUMNS]
 
 
-def _manifest_proteins(frame, source_name):
-    _require_columns(frame, ["Protein Id"], source_name)
-    return {
-        protein_id
-        for protein_id in frame["Protein Id"].map(_clean_text)
-        if protein_id
-    }
-
-
 def assert_protein_disjoint(outputs):
     if set(outputs) != REQUIRED_OUTPUTS:
         raise ValueError(f"unexpected output keys: {sorted(outputs)}")
     train_proteins = set().union(
         *(
-            _manifest_proteins(frame, name)
+            _normalized_protein_set(frame, name)
             for name, frame in outputs.items()
             if name.endswith("_train")
         )
     )
     test_proteins = set().union(
         *(
-            _manifest_proteins(frame, name)
+            _normalized_protein_set(frame, name)
             for name, frame in outputs.items()
             if name.endswith("_test")
         )
@@ -615,7 +600,7 @@ def generate_quality_manifests(
         else sequence_resolver
     )
 
-    prepare_verified_sources(
+    source_validation = prepare_verified_sources(
         cache_dir, source_urls=source_urls, source_md5=source_md5
     )
     source = pd.read_csv(cache_dir / "normalLabeled.csv")
@@ -657,12 +642,6 @@ def generate_quality_manifests(
     official_sequence_failures = collect_sequence_failures(
         official_train, official_test, sequences, unresolved
     )
-    _raise_official_failures(
-        official_sequence_failures,
-        f"{len(official_sequence_failures)} official HQ rows lack a unique "
-        "nonblank reviewed sequence",
-    )
-
     supplemental, sequence_failures = _supplemental_sequence_failures(
         supplemental, split_mapping, sequences, unresolved
     )
@@ -671,6 +650,13 @@ def generate_quality_manifests(
         supplemental, split_mapping
     )
     failures.extend(image_failures)
+    _raise_official_failures(
+        [*failures, *official_sequence_failures]
+        if official_sequence_failures
+        else [],
+        f"{len(official_sequence_failures)} official HQ rows lack a unique "
+        "nonblank reviewed sequence",
+    )
 
     outputs = assemble_quality_outputs(
         official_train,
@@ -688,6 +674,7 @@ def generate_quality_manifests(
         "published": False,
         "record_id": ZENODO_RECORD_ID,
         "seed": seed,
+        "source_validation": source_validation,
         "preparation": preparation_stats,
         "split": split_stats,
         "output_rows": {

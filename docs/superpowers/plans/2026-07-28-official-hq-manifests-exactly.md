@@ -72,7 +72,7 @@ Also assert both output row counts equal their official inputs, the extra supple
 Run:
 
 ```powershell
-python -m unittest dataset.download.test_official_hq_manifests.OfficialHqCliTest.test_cli_publishes_only_official_rows_in_official_order -v
+rtk python -m unittest dataset.download.test_official_hq_manifests.OfficialHqCliTest.test_cli_publishes_only_official_rows_in_official_order -v
 ```
 
 Expected: import failure because `official_hq_manifests.py` does not exist.
@@ -123,7 +123,7 @@ Test that two identical reviewed results collapse to one sequence, two distinct 
 Run:
 
 ```powershell
-python -m unittest dataset.download.test_official_hq_manifests.SequenceResolutionTest -v
+rtk python -m unittest dataset.download.test_official_hq_manifests.SequenceResolutionTest -v
 ```
 
 Expected: failures because the parser and resolver are absent.
@@ -148,7 +148,7 @@ For every case, assert `main` returns `1`, `manifest_generation_report.json` has
 Run:
 
 ```powershell
-python -m unittest dataset.download.test_official_hq_manifests.OfficialHqFailureTest -v
+rtk python -m unittest dataset.download.test_official_hq_manifests.OfficialHqFailureTest -v
 ```
 
 Expected: assertions fail because fatal failures are not yet converted into row-level reports.
@@ -212,7 +212,7 @@ Run the occupied/stale-history tests and rollback test. Expected: all pass.
 Run:
 
 ```powershell
-python -m unittest dataset.download.test_official_hq_manifests -v
+rtk python -m unittest dataset.download.test_official_hq_manifests -v
 ```
 
 Expected: every new unit and CLI fixture test passes.
@@ -222,8 +222,8 @@ Expected: every new unit and CLI fixture test passes.
 Run:
 
 ```powershell
-python -m unittest discover -s dataset/download -p "test_*.py" -v
-python -m unittest discover -s tests -v
+rtk python -m unittest discover -s dataset/download -p "test_*.py" -v
+rtk python -m unittest discover -s tests -v
 ```
 
 Record exact pass/failure counts. Investigate failures caused by ticket 02; report unrelated pre-existing failures without weakening the ticket requirements.
@@ -233,18 +233,18 @@ Record exact pass/failure counts. Investigate failures caused by ticket 02; repo
 Run:
 
 ```powershell
-python -m py_compile dataset/download/official_hq_manifests.py dataset/download/test_official_hq_manifests.py
-python dataset/download/official_hq_manifests.py --help
+rtk python -m py_compile dataset/download/official_hq_manifests.py dataset/download/test_official_hq_manifests.py
+rtk python dataset/download/official_hq_manifests.py --help
 ```
 
 Expected: compilation exits 0; help lists only `--cache-dir` and `--output-dir`; importing the module performs no I/O.
 
 - [ ] **Step 4: Inspect exact Git scope and commit ticket files only**
 
-Run `git diff --check`, inspect the three ticket files, stage them with explicit paths, and inspect `git diff --cached --check` plus `git diff --cached`. Commit with:
+Run `rtk git diff --check`, inspect the three ticket files, stage them with explicit paths, and inspect `rtk git diff --cached --check` plus `rtk git diff --cached`. Commit with:
 
 ```powershell
-git commit -m "feat: publish official HQ manifests exactly"
+rtk git commit -m "feat: publish official HQ manifests exactly"
 ```
 
 Do not stage the pre-existing changes in `filter_quality_urls.py`, `test_filter_quality_urls.py`, or unrelated files.
@@ -259,4 +259,4 @@ After review and fresh verification succeed, change `Status` to `done` and tick 
 
 - [ ] **Step 7: Final verification and handoff**
 
-Run the complete new test module, dependency tests, applicable full suites, compile checks, CLI help, `git diff --check`, `git status --short`, and `git log -3 --oneline`. Report exact evidence, commit SHA(s), untouched pre-existing worktree changes, and any remaining risk. Do not run real production downloads or push.
+Run the complete new test module, dependency tests, applicable full suites, compile checks, CLI help, `rtk git diff --check`, `rtk git status --short`, and `rtk git log -3 --oneline`. Report exact evidence, commit SHA(s), untouched pre-existing worktree changes, and any remaining risk. Do not run real production downloads or push.

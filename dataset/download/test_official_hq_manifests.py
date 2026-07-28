@@ -123,7 +123,7 @@ class OfficialHqCliTest(unittest.TestCase):
 
             rows = [
                 official_row(10, "P10", "HPA000010", "P10/Brain/a.jpg"),
-                official_row(20, "P20", "HPA000020", "shared/Brain/shared.jpg"),
+                official_row(20, " P20 ", "HPA000020", "shared/Brain/shared.jpg"),
                 official_row(30, "P30", "HPA000030", "P30/Brain/c.jpg"),
                 official_row(40, "P40", "HPA000020", "shared/Brain/shared.jpg"),
                 official_row(50, "P50", "HPA000050", "P50/Brain/extra.jpg"),
@@ -159,7 +159,7 @@ class OfficialHqCliTest(unittest.TestCase):
             test = pd.read_csv(output_dir / "HQ_test_img_URL.csv")
             self.assertEqual(train[SOURCE_ROW_ID].tolist(), [20, 10])
             self.assertEqual(test[SOURCE_ROW_ID].tolist(), [40, 30])
-            self.assertEqual(train["Protein Id"].tolist(), ["P20", "P10"])
+            self.assertEqual(train["Protein Id"].tolist(), [" P20 ", "P10"])
             self.assertEqual(test["Protein Id"].tolist(), ["P40", "P30"])
             self.assertNotIn("P50", set(train["Protein Id"]) | set(test["Protein Id"]))
             self.assertEqual(len(train), len(official_train))

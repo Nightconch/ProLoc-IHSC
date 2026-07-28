@@ -156,7 +156,6 @@ def assemble_official_hq(train, test, sequences):
     ):
         _require_columns(frame, SOURCE_COLUMNS, f"data_{split}.csv")
         result = frame.copy()
-        result["Protein Id"] = protein_ids
         missing_sequences = sorted(
             {
                 protein_id or "<blank>"

@@ -11,11 +11,6 @@ from PIL import Image
 
 from dataset.download import download as downloader
 from dataset.download import supplemental_quality_manifests as manifests
-from dataset.download.official_hq_manifests import (
-    DOWNLOAD_LABEL_COLUMNS,
-    SOURCE_COLUMNS,
-    SOURCE_ROW_ID,
-)
 
 
 DATASETS = (
@@ -26,6 +21,41 @@ DATASETS = (
     ("LQ", "train"),
     ("LQ", "test"),
 )
+SOURCE_ROW_ID = "Unnamed: 0"
+REQUIRED_SOURCE_COLUMNS = [
+    "Unnamed: 0",
+    "Protein Name",
+    "Protein Id",
+    "Antibody Id",
+    "Reliability Verification",
+    "Tissue",
+    "Organ",
+    "Staining Level",
+    "Intensity Level",
+    "Quantity",
+    "SnomedParameters",
+    "URL",
+    "IF Verification",
+    "locations",
+    "IF Organ",
+    "cytoplasm",
+    "cytoskeleton",
+    "endoplasmic reticulum",
+    "golgi apparatus",
+    "lysosomes",
+    "mitochondria",
+    "nucleoli",
+    "nucleus",
+    "plasma membrane",
+    "vesicles",
+]
+REQUIRED_DOWNLOAD_LABEL_COLUMNS = [
+    "cytoplasm",
+    "endoplasmic reticulum",
+    "mitochondria",
+    "nucleus",
+    "plasma membrane",
+]
 MANIFEST_FILENAMES = [
     "HQ_train_img_URL.csv",
     "HQ_test_img_URL.csv",
@@ -45,6 +75,57 @@ EXPECTED_FINAL_COLUMNS = [
     "Sequence",
     "Protein Id",
 ]
+EXPECTED_MANIFEST_SOURCE_IDS = {
+    "HQ_train": [20, 10],
+    "HQ_test": [30],
+    "MQ_train": [40, 42, 44, 100, 102, 104, 106],
+    "MQ_test": [108],
+    "LQ_train": [101, 103, 105, 107, 109],
+    "LQ_test": [41, 43],
+}
+EXPECTED_FINAL_FILE_NAMES = {
+    "HQ_train": [
+        "P_HQ_TRAIN-official-rgb-HPA000123-nucleus.jpg",
+        "P_HQ_A-official-gray-HPA000123-nucleus.jpg",
+    ],
+    "HQ_test": ["P_HQ_TEST-official-rgba-HPA000123-nucleus.jpg"],
+    "MQ_train": [
+        "P_HQ_TRAIN-shared-HPA000777-nucleus.jpg",
+        "P_UNKNOWN_0-unknown-0-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_2-unknown-2-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_4-unknown-4-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_6-unknown-6-HPA000123-nucleus.jpg",
+    ],
+    "MQ_test": ["P_UNKNOWN_8-unknown-8-HPA000123-nucleus.jpg"],
+    "LQ_train": [
+        "P_UNKNOWN_1-unknown-1-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_3-unknown-3-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_5-unknown-5-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_7-unknown-7-HPA000123-nucleus.jpg",
+        "P_UNKNOWN_9-unknown-9-HPA000123-nucleus.jpg",
+    ],
+    "LQ_test": ["P_HQ_TEST-shared-HPA000777-nucleus.jpg"],
+}
+EXPECTED_FINAL_PROTEIN_IDS = {
+    "HQ_train": ["P_HQ_TRAIN", "P_HQ_A"],
+    "HQ_test": ["P_HQ_TEST"],
+    "MQ_train": [
+        "P_HQ_TRAIN",
+        "P_UNKNOWN_0",
+        "P_UNKNOWN_2",
+        "P_UNKNOWN_4",
+        "P_UNKNOWN_6",
+    ],
+    "MQ_test": ["P_UNKNOWN_8"],
+    "LQ_train": [
+        "P_UNKNOWN_1",
+        "P_UNKNOWN_3",
+        "P_UNKNOWN_5",
+        "P_UNKNOWN_7",
+        "P_UNKNOWN_9",
+    ],
+    "LQ_test": ["P_HQ_TEST"],
+}
 
 
 class FixtureResponse:
@@ -82,8 +163,8 @@ def source_row(
     *,
     antibody_id="HPA000123",
 ):
-    row = {column: "" for column in SOURCE_COLUMNS}
-    row.update({column: 0 for column in DOWNLOAD_LABEL_COLUMNS})
+    row = {column: "" for column in REQUIRED_SOURCE_COLUMNS}
+    row.update({column: 0 for column in REQUIRED_DOWNLOAD_LABEL_COLUMNS})
     row.update(
         {
             SOURCE_ROW_ID: source_id,
@@ -145,14 +226,16 @@ def fixture_frames():
         )
     source = pd.DataFrame(
         [official_a, official_train, official_test, *supplemental_rows],
-        columns=SOURCE_COLUMNS,
+        columns=REQUIRED_SOURCE_COLUMNS,
     )
     return {
         "normalLabeled.csv": source,
         "data_train.csv": pd.DataFrame(
-            [official_train, official_a], columns=SOURCE_COLUMNS
+            [official_train, official_a], columns=REQUIRED_SOURCE_COLUMNS
         ),
-        "data_test.csv": pd.DataFrame([official_test], columns=SOURCE_COLUMNS),
+        "data_test.csv": pd.DataFrame(
+            [official_test], columns=REQUIRED_SOURCE_COLUMNS
+        ),
     }
 
 
@@ -306,6 +389,11 @@ class DatasetPipelineEndToEndTest(unittest.TestCase):
                 )
                 for filename in MANIFEST_FILENAMES
             }
+            for dataset, expected_source_ids in EXPECTED_MANIFEST_SOURCE_IDS.items():
+                self.assertEqual(
+                    manifest_frames[dataset][SOURCE_ROW_ID].tolist(),
+                    expected_source_ids,
+                )
             self.assertIn(40, manifest_frames["MQ_train"]["Unnamed: 0"].tolist())
             self.assertIn(41, manifest_frames["LQ_test"]["Unnamed: 0"].tolist())
             shared_url = manifest_frames["MQ_train"].loc[
@@ -342,13 +430,14 @@ class DatasetPipelineEndToEndTest(unittest.TestCase):
                     final_frame["File Name"].tolist(),
                     repeated_final_outputs[dataset]["File Name"].tolist(),
                 )
-                expected_proteins = manifest_frames[dataset].loc[
-                    ~manifest_frames[dataset]["Image Name"].isin(
-                        {"white.png", "corrupt.jpg", "unavailable.jpg"}
-                    ),
-                    "Protein Id",
-                ].map(str.strip).tolist()
-                self.assertEqual(final_frame["Protein Id"].tolist(), expected_proteins)
+                self.assertEqual(
+                    final_frame["File Name"].tolist(),
+                    EXPECTED_FINAL_FILE_NAMES[dataset],
+                )
+                self.assertEqual(
+                    final_frame["Protein Id"].tolist(),
+                    EXPECTED_FINAL_PROTEIN_IDS[dataset],
+                )
 
             failures = pd.read_csv(first_output / "download_failures.csv").fillna("")
             self.assertEqual(

@@ -197,7 +197,7 @@ rtk git -c safe.directory=E:/work/ProLoc-IHCS diff --check
 
 Record exact counts and any environment-only downstream failure. Do not install `torch` or alter training code.
 
-- [ ] **Step 2: Mark ticket 07 complete only after evidence is fresh**
+- [x] **Step 2: Mark ticket 07 complete only after evidence is fresh**
 
 Change only ticket 07 from `ready-for-agent` to `done` and its eight checklist markers from `[ ]` to `[x]` once every ticket-scoped requirement is satisfied. If the downstream environment failure prevents an honest checkbox, leave the affected item open and report it.
 
@@ -229,11 +229,10 @@ Expected: no ticket-owned file remains uncommitted, every pre-existing dirty pat
 - The dataset-download suite passed all 118 tests.  Compilation, both public
   CLI `--help` commands, whitespace checks, and obsolete-contract/TODO audits
   also passed; the controlled fixtures made no real downloads.
-- The root `tests` suite is blocked before collection completes because the
-  user-maintained Python environment lacks `torch` for importing `train.py`.
-  No dependency installation or training-code change was made.  Ticket 07
-  remains `ready-for-agent`, and Task 4 Step 2 remains unchecked.
-- Evidence/status was committed in `119c5d5`; the fixed-base review is complete,
-  and its actionable in-repository finding (stale execution checkboxes in this
-  plan) is resolved by this follow-up status update.  Do not claim ticket closure
-  until the root-suite environment blocker is resolved and independently verified.
+- The user-selected local Conda `psl` environment provides PyTorch
+  `2.8.0+cu129`.  In that unchanged environment, the root `tests` suite passed
+  all 7 tests and the dataset-download suite passed all 118 tests.  No dependency
+  installation or training-code change was made.
+- The fixed-base and scoped follow-up reviews are complete.  Their actionable
+  findings were resolved, the final verification is fresh, and ticket 07 is now
+  `done` with all eight checklist items checked.

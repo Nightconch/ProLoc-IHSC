@@ -1,7 +1,15 @@
+import hashlib
+import io
+import json
+import os
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 import pandas as pd
 
+from dataset.download import filter_quality_urls as source_module
 from dataset.download import supplemental_quality_manifests as manifests
 from dataset.download.official_hq_manifests import (
     DOWNLOAD_LABEL_COLUMNS,
@@ -13,6 +21,16 @@ from dataset.download.supplemental_quality_manifests import (
     classify_quality,
     prepare_supplemental_rows,
 )
+
+
+FORMAL_FILENAMES = [
+    "HQ_train_img_URL.csv",
+    "HQ_test_img_URL.csv",
+    "MQ_train_img_URL.csv",
+    "MQ_test_img_URL.csv",
+    "LQ_train_img_URL.csv",
+    "LQ_test_img_URL.csv",
+]
 
 
 def quality_row(
@@ -45,6 +63,93 @@ def quality_row(
         }
     )
     return row
+
+
+def _file_md5(path):
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def cli_fixture_frames():
+    official_a = quality_row(
+        10, "P_HQ_A", "strong", ">75%", "official-a.jpg"
+    )
+    official_b = quality_row(
+        20, " P_HQ_B ", "strong", ">75%", "official-b.jpg"
+    )
+    official_test_row = quality_row(
+        30, "P_HQ_TEST", "strong", ">75%", "official-test.jpg"
+    )
+    supplemental_rows = [
+        quality_row(40, "P_HQ_B", "strong", ">75%", "shared.jpg"),
+        quality_row(41, "P_HQ_TEST", "weak", ">75%", "shared.jpg"),
+    ]
+    for number in range(10):
+        row = quality_row(
+            100 + number,
+            f"P_UNKNOWN_{number}",
+            "moderate" if number % 2 == 0 else "weak",
+            ">75%",
+            f"unknown-{number}.jpg",
+        )
+        row.update({column: 0 for column in DOWNLOAD_LABEL_COLUMNS})
+        row[DOWNLOAD_LABEL_COLUMNS[number % len(DOWNLOAD_LABEL_COLUMNS)]] = 1
+        if number % 4 == 0:
+            row["nucleus"] = 1
+        supplemental_rows.append(row)
+    supplemental_rows.extend(
+        [
+            quality_row(
+                210,
+                "P_UNRESOLVED",
+                "moderate",
+                ">75%",
+                "unresolved.jpg",
+            ),
+            quality_row(220, "   ", "weak", ">75%", "blank.jpg"),
+        ]
+    )
+    invalid_image = quality_row(
+        230,
+        "P_BAD_IMAGE",
+        "moderate",
+        ">75%",
+        "bad-image.jpg",
+    )
+    invalid_image["Antibody Id"] = "not-an-antibody"
+    supplemental_rows.append(invalid_image)
+    source = pd.DataFrame(
+        [official_a, official_b, official_test_row, *supplemental_rows]
+    )
+    return {
+        "normalLabeled.csv": source,
+        "data_train.csv": pd.DataFrame([official_b, official_a]),
+        "data_test.csv": pd.DataFrame([official_test_row]),
+    }
+
+
+def write_cli_fixture(cache_dir):
+    cache_dir.mkdir(parents=True)
+    fixture_md5 = {}
+    for name, frame in cli_fixture_frames().items():
+        path = cache_dir / name
+        frame.to_csv(path, index=False)
+        fixture_md5[name] = _file_md5(path)
+    fixture_urls = {
+        name: f"https://fixtures.invalid/{name}" for name in fixture_md5
+    }
+    return fixture_urls, fixture_md5
+
+
+def fixture_sequence_resolver(protein_ids, _cache_path):
+    requested = {str(protein_id).strip() for protein_id in protein_ids}
+    unresolved = {"P_UNRESOLVED"} & requested
+    return (
+        {
+            protein_id: f"SEQUENCE_{protein_id}"
+            for protein_id in requested - unresolved
+        },
+        unresolved,
+    )
 
 
 class SupplementalPreparationTest(unittest.TestCase):
@@ -338,6 +443,298 @@ class ManifestAssemblyTest(unittest.TestCase):
             AssertionError, "Protein Id overlap between train and test.*P1"
         ):
             manifests.assert_protein_disjoint(outputs)
+
+
+class SupplementalManifestCliTest(unittest.TestCase):
+    def _run(self, root, seed=73, sequence_resolver=fixture_sequence_resolver):
+        cache_dir = root / "cache"
+        output_dir = root / "output"
+        source_urls, source_md5 = write_cli_fixture(cache_dir)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = manifests.main(
+                [
+                    "--cache-dir",
+                    str(cache_dir),
+                    "--output-dir",
+                    str(output_dir),
+                    "--seed",
+                    str(seed),
+                ],
+                source_urls=source_urls,
+                source_md5=source_md5,
+                sequence_resolver=sequence_resolver,
+            )
+        return exit_code, output_dir, stdout.getvalue(), stderr.getvalue()
+
+    def test_cli_publishes_deterministic_six_manifest_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first"
+            second = root / "second"
+
+            exit_a, output_a, stdout_a, stderr_a = self._run(first)
+            exit_b, output_b, stdout_b, stderr_b = self._run(second)
+
+            self.assertEqual((exit_a, exit_b), (0, 0))
+            self.assertEqual(stderr_a, "")
+            self.assertEqual(stderr_b, "")
+            self.assertEqual(json.loads(stdout_a), json.loads(stdout_b))
+
+            for filename in [
+                *FORMAL_FILENAMES,
+                "manifest_failures.csv",
+                "manifest_generation_report.json",
+            ]:
+                self.assertEqual(
+                    (output_a / filename).read_bytes(),
+                    (output_b / filename).read_bytes(),
+                    filename,
+                )
+
+            outputs = {
+                filename.removesuffix("_img_URL.csv"): pd.read_csv(
+                    output_a / filename
+                )
+                for filename in FORMAL_FILENAMES
+            }
+            self.assertEqual(
+                outputs["HQ_train"][SOURCE_ROW_ID].tolist(), [20, 10]
+            )
+            self.assertEqual(
+                outputs["HQ_test"][SOURCE_ROW_ID].tolist(), [30]
+            )
+            supplemental = pd.concat(
+                [
+                    outputs[name]
+                    for name in ("MQ_train", "MQ_test", "LQ_train", "LQ_test")
+                ],
+                ignore_index=True,
+            )
+            self.assertTrue({10, 20, 30}.isdisjoint(set(supplemental[SOURCE_ROW_ID])))
+            self.assertIn(40, set(outputs["MQ_train"][SOURCE_ROW_ID]))
+            self.assertIn(41, set(outputs["LQ_test"][SOURCE_ROW_ID]))
+
+            shared_mq = outputs["MQ_train"].loc[
+                outputs["MQ_train"][SOURCE_ROW_ID].eq(40), "Modified URL"
+            ].iloc[0]
+            shared_lq = outputs["LQ_test"].loc[
+                outputs["LQ_test"][SOURCE_ROW_ID].eq(41), "Modified URL"
+            ].iloc[0]
+            self.assertEqual(shared_mq, shared_lq)
+
+            unknown_ids = {f"P_UNKNOWN_{number}" for number in range(10)}
+            observed_unknown = {
+                str(protein_id).strip()
+                for protein_id in supplemental["Protein Id"]
+                if str(protein_id).strip() in unknown_ids
+            }
+            self.assertEqual(observed_unknown, unknown_ids)
+
+            train_ids = {
+                str(protein_id).strip()
+                for name, frame in outputs.items()
+                if name.endswith("_train")
+                for protein_id in frame["Protein Id"]
+            }
+            test_ids = {
+                str(protein_id).strip()
+                for name, frame in outputs.items()
+                if name.endswith("_test")
+                for protein_id in frame["Protein Id"]
+            }
+            self.assertEqual(train_ids & test_ids, set())
+
+            failures = pd.read_csv(output_a / "manifest_failures.csv").fillna("")
+            self.assertEqual(
+                {
+                    (str(row["source_row"]), row["stage"], row["Protein Id"])
+                    for row in failures.to_dict("records")
+                },
+                {
+                    ("210", "sequence", "P_UNRESOLVED"),
+                    ("220", "protein_id", ""),
+                    ("230", "image_fields", "P_BAD_IMAGE"),
+                },
+            )
+            self.assertNotIn("P_UNRESOLVED", set(supplemental["Protein Id"]))
+            self.assertNotIn("P_BAD_IMAGE", set(supplemental["Protein Id"]))
+
+            report = json.loads(
+                (output_a / "manifest_generation_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "ok")
+            self.assertTrue(report["published"])
+            self.assertEqual(report["protein_id_overlap"], 0)
+            self.assertEqual(report["split"]["unknown_proteins"], 12)
+            self.assertEqual(report["split"]["unknown_test_proteins"], 1)
+
+    def test_unresolved_official_sequence_preserves_existing_manifests(self):
+        def unresolved_official(protein_ids, cache_path):
+            sequences, unresolved = fixture_sequence_resolver(
+                protein_ids, cache_path
+            )
+            sequences.pop("P_HQ_A", None)
+            return sequences, unresolved | {"P_HQ_A"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "output"
+            output_dir.mkdir(parents=True)
+            sentinels = {}
+            for filename in FORMAL_FILENAMES:
+                payload = f"old-{filename}".encode()
+                (output_dir / filename).write_bytes(payload)
+                sentinels[filename] = payload
+
+            cache_dir = root / "cache"
+            source_urls, source_md5 = write_cli_fixture(cache_dir)
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = manifests.main(
+                    [
+                        "--cache-dir",
+                        str(cache_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--seed",
+                        "73",
+                    ],
+                    source_urls=source_urls,
+                    source_md5=source_md5,
+                    sequence_resolver=unresolved_official,
+                )
+
+            self.assertEqual(exit_code, 1)
+            for filename, payload in sentinels.items():
+                self.assertEqual((output_dir / filename).read_bytes(), payload)
+            report = json.loads(
+                (output_dir / "manifest_generation_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "error")
+            self.assertFalse(report["published"])
+            failures = pd.read_csv(output_dir / "manifest_failures.csv")
+            official_failures = failures.loc[failures["tier"].eq("HQ")]
+            self.assertIn("P_HQ_A", set(official_failures["Protein Id"]))
+            self.assertIn('"status": "error"', stderr.getvalue())
+
+
+class ManifestPublicationTest(unittest.TestCase):
+    def _outputs(self):
+        outputs = {}
+        for tier in ("HQ", "MQ", "LQ"):
+            for split in ("train", "test"):
+                row = {column: "" for column in OUTPUT_COLUMNS}
+                row["Protein Id"] = f"P_{split.upper()}_{tier}"
+                outputs[f"{tier}_{split}"] = pd.DataFrame(
+                    [row], columns=OUTPUT_COLUMNS
+                )
+        return outputs
+
+    def test_global_overlap_is_rejected_before_staging(self):
+        outputs = self._outputs()
+        outputs["HQ_test"].loc[0, "Protein Id"] = " P_TRAIN_HQ "
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            with self.assertRaisesRegex(AssertionError, "Protein Id overlap"):
+                manifests.publish_quality_bundle(outputs, output_dir)
+
+            self.assertEqual(list(output_dir.iterdir()), [])
+
+    def test_publish_rolls_back_all_six_manifests(self):
+        outputs = self._outputs()
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            sentinels = {}
+            for filename in FORMAL_FILENAMES:
+                payload = f"old-{filename}".encode()
+                (output_dir / filename).write_bytes(payload)
+                sentinels[filename] = payload
+
+            def fail_on_third_staged_replace(source, destination):
+                source = Path(source)
+                destination = Path(destination)
+                if (
+                    source.parent != output_dir
+                    and destination.parent == output_dir
+                    and destination.name == "MQ_train_img_URL.csv"
+                ):
+                    raise OSError("injected third publish failure")
+                os.replace(source, destination)
+
+            with self.assertRaisesRegex(
+                OSError, "injected third publish failure"
+            ):
+                manifests.publish_quality_bundle(
+                    outputs,
+                    output_dir,
+                    replace=fail_on_third_staged_replace,
+                )
+
+            for filename, payload in sentinels.items():
+                self.assertEqual((output_dir / filename).read_bytes(), payload)
+            self.assertEqual(
+                sorted(path.name for path in output_dir.iterdir()),
+                sorted(FORMAL_FILENAMES),
+            )
+
+    def test_publish_retains_backup_when_restore_fails(self):
+        outputs = self._outputs()
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            sentinels = {}
+            for filename in FORMAL_FILENAMES:
+                payload = f"old-{filename}".encode()
+                (output_dir / filename).write_bytes(payload)
+                sentinels[filename] = payload
+
+            def fail_publish_and_mq_train_restore(source, destination):
+                source = Path(source)
+                destination = Path(destination)
+                if (
+                    source.parent != output_dir
+                    and destination.parent == output_dir
+                    and destination.name == "MQ_train_img_URL.csv"
+                ):
+                    raise OSError("injected publish failure")
+                if (
+                    source.parent == output_dir
+                    and source.name.startswith(
+                        ".MQ_train_img_URL.csv.backup-"
+                    )
+                    and destination.name == "MQ_train_img_URL.csv"
+                ):
+                    raise OSError("injected restore failure")
+                os.replace(source, destination)
+
+            with self.assertRaisesRegex(
+                RuntimeError, "rollback also failed.*injected restore failure"
+            ):
+                manifests.publish_quality_bundle(
+                    outputs,
+                    output_dir,
+                    replace=fail_publish_and_mq_train_restore,
+                )
+
+            retained = list(
+                output_dir.glob(".MQ_train_img_URL.csv.backup-*")
+            )
+            self.assertEqual(len(retained), 1)
+            self.assertEqual(
+                retained[0].read_bytes(),
+                sentinels["MQ_train_img_URL.csv"],
+            )
+            for filename, payload in sentinels.items():
+                if filename != "MQ_train_img_URL.csv":
+                    self.assertEqual(
+                        (output_dir / filename).read_bytes(), payload
+                    )
 
 
 if __name__ == "__main__":

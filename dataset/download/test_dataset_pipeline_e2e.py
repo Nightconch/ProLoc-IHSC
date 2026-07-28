@@ -1,6 +1,8 @@
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -243,10 +245,11 @@ def file_md5(path):
     return hashlib.md5(Path(path).read_bytes()).hexdigest()
 
 
-def write_fixture_sources(cache_dir):
+def write_fixture_sources(cache_dir, frames=None):
     cache_dir.mkdir(parents=True)
     source_md5 = {}
-    for name, frame in fixture_frames().items():
+    frames = fixture_frames() if frames is None else frames
+    for name, frame in frames.items():
         path = cache_dir / name
         frame.to_csv(path, index=False)
         source_md5[name] = file_md5(path)
@@ -292,6 +295,112 @@ def controlled_http_get(url, timeout):
 
 
 class DatasetPipelineEndToEndTest(unittest.TestCase):
+    def test_script_help_exposes_documented_arguments_without_pipeline_work(self):
+        scripts = (
+            (
+                Path(manifests.__file__),
+                {"--output-dir", "--cache-dir", "--seed"},
+            ),
+            (
+                Path(downloader.__file__),
+                {"--manifest-dir", "--output-dir", "--workers"},
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            working_dir = Path(directory)
+            for script, documented_arguments in scripts:
+                with self.subTest(script=script.name):
+                    result = subprocess.run(
+                        [sys.executable, str(script), "--help"],
+                        cwd=working_dir,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stderr, "")
+                    self.assertTrue(
+                        documented_arguments.issubset(result.stdout.split())
+                    )
+            self.assertEqual(list(working_dir.iterdir()), [])
+
+    def test_manifest_main_writes_error_diagnostics_for_trimmed_official_overlap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+            output_dir = root / "manifest-output"
+            frames = fixture_frames()
+            frames["normalLabeled.csv"].loc[
+                frames["normalLabeled.csv"][SOURCE_ROW_ID].eq(30), "Protein Id"
+            ] = " P_HQ_TRAIN "
+            frames["data_test.csv"].loc[:, "Protein Id"] = " P_HQ_TRAIN "
+            fixture_urls, fixture_md5 = write_fixture_sources(cache_dir, frames)
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                result = manifests.main(
+                    [
+                        "--cache-dir",
+                        str(cache_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--seed",
+                        "73",
+                    ],
+                    source_urls=fixture_urls,
+                    source_md5=fixture_md5,
+                    sequence_resolver=fixture_sequence_resolver,
+                )
+
+            self.assertEqual(result, 1)
+            error_report = json.loads(stderr.getvalue())
+            self.assertEqual(error_report["status"], "error")
+            self.assertTrue(
+                (output_dir / "manifest_generation_report.json").is_file()
+            )
+            self.assertTrue((output_dir / "manifest_failures.csv").is_file())
+
+    def test_downloader_script_reports_missing_formal_manifest_before_http(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "download-output"
+            manifest_dir.mkdir()
+            for tier, split in DATASETS[1:]:
+                pd.DataFrame(columns=downloader.REQUIRED_MANIFEST_COLUMNS).to_csv(
+                    manifest_dir / f"{tier}_{split}_img_URL.csv", index=False
+                )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(downloader.__file__)),
+                    "--manifest-dir",
+                    str(manifest_dir),
+                    "--output-dir",
+                    str(output_dir),
+                    "--workers",
+                    "1",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            audit_report = json.loads(
+                (output_dir / "download_audit_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(audit_report["status"], "error")
+            self.assertFalse(audit_report["published"])
+            self.assertIn(
+                "HQ_train_img_URL.csv", audit_report["error"]["message"]
+            )
+
     def run_pipeline(self, root):
         cache_dir = root / "cache"
         manifest_dir = root / "manifests"

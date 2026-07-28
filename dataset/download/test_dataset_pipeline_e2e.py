@@ -83,53 +83,238 @@ EXPECTED_FINAL_COLUMNS = [
 EXPECTED_MANIFEST_SOURCE_IDS = {
     "HQ_train": [20, 10],
     "HQ_test": [30],
-    "MQ_train": [40, 42, 44, 100, 102, 104, 106],
-    "MQ_test": [108],
+    "MQ_train": [40, 42, 44, 45, 102, 104, 106, 108],
+    "MQ_test": [100],
     "LQ_train": [101, 103, 105, 107, 109],
     "LQ_test": [41, 43],
 }
-EXPECTED_FINAL_FILE_NAMES = {
+EXPECTED_FINAL_RECORDS = {
     "HQ_train": [
-        "P_HQ_TRAIN-official-rgb-HPA000123-nucleus.jpg",
-        "P_HQ_A-official-gray-HPA000123-nucleus.jpg",
+        {
+            "File Name": "P_HQ_TRAIN-official-rgb-HPA000123-loc-20.jpg",
+            "locations": "loc-20",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_HQ_TRAIN",
+            "Protein Id": "P_HQ_TRAIN",
+        },
+        {
+            "File Name": "P_HQ_A-official-gray-HPA000123-loc-10.jpg",
+            "locations": "loc-10",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_HQ_A",
+            "Protein Id": "P_HQ_A",
+        },
     ],
-    "HQ_test": ["P_HQ_TEST-official-rgba-HPA000123-nucleus.jpg"],
+    "HQ_test": [
+        {
+            "File Name": "P_HQ_TEST-official-rgba-HPA000123-loc-30.jpg",
+            "locations": "loc-30",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_HQ_TEST",
+            "Protein Id": "P_HQ_TEST",
+        }
+    ],
     "MQ_train": [
-        "P_HQ_TRAIN-shared-HPA000777-nucleus.jpg",
-        "P_UNKNOWN_0-unknown-0-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_2-unknown-2-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_4-unknown-4-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_6-unknown-6-HPA000123-nucleus.jpg",
+        {
+            "File Name": "P_HQ_TRAIN-shared-HPA000777-loc-40.jpg",
+            "locations": "loc-40",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 1,
+            "nucleus": 0,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_HQ_TRAIN",
+            "Protein Id": "P_HQ_TRAIN",
+        },
+        {
+            "File Name": "P_HQ_A-cmyk-HPA000123-loc-45.jpg",
+            "locations": "loc-45",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 0,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_HQ_A",
+            "Protein Id": "P_HQ_A",
+        },
+        {
+            "File Name": "P_UNKNOWN_2-unknown-2-HPA000123-loc-102.jpg",
+            "locations": "loc-102",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 1,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_UNKNOWN_2",
+            "Protein Id": "P_UNKNOWN_2",
+        },
+        {
+            "File Name": "P_UNKNOWN_4-unknown-4-HPA000123-loc-104.jpg",
+            "locations": "loc-104",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 1,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_UNKNOWN_4",
+            "Protein Id": "P_UNKNOWN_4",
+        },
+        {
+            "File Name": "P_UNKNOWN_6-unknown-6-HPA000123-loc-106.jpg",
+            "locations": "loc-106",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 1,
+            "Sequence": "SEQUENCE_P_UNKNOWN_6",
+            "Protein Id": "P_UNKNOWN_6",
+        },
+        {
+            "File Name": "P_UNKNOWN_8-unknown-8-HPA000123-loc-108.jpg",
+            "locations": "loc-108",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 1,
+            "Sequence": "SEQUENCE_P_UNKNOWN_8",
+            "Protein Id": "P_UNKNOWN_8",
+        },
     ],
-    "MQ_test": ["P_UNKNOWN_8-unknown-8-HPA000123-nucleus.jpg"],
+    "MQ_test": [
+        {
+            "File Name": "P_UNKNOWN_0-unknown-0-HPA000123-loc-100.jpg",
+            "locations": "loc-100",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 0,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_UNKNOWN_0",
+            "Protein Id": "P_UNKNOWN_0",
+        }
+    ],
     "LQ_train": [
-        "P_UNKNOWN_1-unknown-1-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_3-unknown-3-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_5-unknown-5-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_7-unknown-7-HPA000123-nucleus.jpg",
-        "P_UNKNOWN_9-unknown-9-HPA000123-nucleus.jpg",
+        {
+            "File Name": "P_UNKNOWN_1-unknown-1-HPA000123-loc-101.jpg",
+            "locations": "loc-101",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 0,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_UNKNOWN_1",
+            "Protein Id": "P_UNKNOWN_1",
+        },
+        {
+            "File Name": "P_UNKNOWN_3-unknown-3-HPA000123-loc-103.jpg",
+            "locations": "loc-103",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 1,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_UNKNOWN_3",
+            "Protein Id": "P_UNKNOWN_3",
+        },
+        {
+            "File Name": "P_UNKNOWN_5-unknown-5-HPA000123-loc-105.jpg",
+            "locations": "loc-105",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 1,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_UNKNOWN_5",
+            "Protein Id": "P_UNKNOWN_5",
+        },
+        {
+            "File Name": "P_UNKNOWN_7-unknown-7-HPA000123-loc-107.jpg",
+            "locations": "loc-107",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 1,
+            "Sequence": "SEQUENCE_P_UNKNOWN_7",
+            "Protein Id": "P_UNKNOWN_7",
+        },
+        {
+            "File Name": "P_UNKNOWN_9-unknown-9-HPA000123-loc-109.jpg",
+            "locations": "loc-109",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 1,
+            "mitochondria": 0,
+            "nucleus": 0,
+            "plasma membrane": 1,
+            "Sequence": "SEQUENCE_P_UNKNOWN_9",
+            "Protein Id": "P_UNKNOWN_9",
+        },
     ],
-    "LQ_test": ["P_HQ_TEST-shared-HPA000777-nucleus.jpg"],
+    "LQ_test": [
+        {
+            "File Name": "P_HQ_TEST-shared-HPA000777-loc-41.jpg",
+            "locations": "loc-41",
+            "cytoplasm": 1,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 1,
+            "nucleus": 0,
+            "plasma membrane": 0,
+            "Sequence": "SEQUENCE_P_HQ_TEST",
+            "Protein Id": "P_HQ_TEST",
+        }
+    ],
 }
-EXPECTED_FINAL_PROTEIN_IDS = {
-    "HQ_train": ["P_HQ_TRAIN", "P_HQ_A"],
-    "HQ_test": ["P_HQ_TEST"],
-    "MQ_train": [
-        "P_HQ_TRAIN",
-        "P_UNKNOWN_0",
-        "P_UNKNOWN_2",
-        "P_UNKNOWN_4",
-        "P_UNKNOWN_6",
-    ],
-    "MQ_test": ["P_UNKNOWN_8"],
-    "LQ_train": [
-        "P_UNKNOWN_1",
-        "P_UNKNOWN_3",
-        "P_UNKNOWN_5",
-        "P_UNKNOWN_7",
-        "P_UNKNOWN_9",
-    ],
-    "LQ_test": ["P_HQ_TEST"],
+EXPECTED_DOWNLOAD_DATASET_STATS = {
+    "HQ_train": {
+        "input_rows": 2,
+        "success_rows": 2,
+        "failure_rows": 0,
+        "converted_rows": 1,
+    },
+    "HQ_test": {
+        "input_rows": 1,
+        "success_rows": 1,
+        "failure_rows": 0,
+        "converted_rows": 1,
+    },
+    "MQ_train": {
+        "input_rows": 8,
+        "success_rows": 6,
+        "failure_rows": 2,
+        "converted_rows": 4,
+    },
+    "MQ_test": {
+        "input_rows": 1,
+        "success_rows": 1,
+        "failure_rows": 0,
+        "converted_rows": 0,
+    },
+    "LQ_train": {
+        "input_rows": 5,
+        "success_rows": 5,
+        "failure_rows": 0,
+        "converted_rows": 3,
+    },
+    "LQ_test": {
+        "input_rows": 2,
+        "success_rows": 1,
+        "failure_rows": 1,
+        "converted_rows": 0,
+    },
 }
 
 
@@ -191,10 +376,16 @@ def source_row(
     intensity,
     image_name,
     *,
+    label_code,
     antibody_id="HPA000123",
 ):
     row = {column: "" for column in REQUIRED_SOURCE_COLUMNS}
-    row.update({column: 0 for column in REQUIRED_DOWNLOAD_LABEL_COLUMNS})
+    row.update(
+        {
+            column: (label_code >> offset) & 1
+            for offset, column in enumerate(REQUIRED_DOWNLOAD_LABEL_COLUMNS)
+        }
+    )
     row.update(
         {
             SOURCE_ROW_ID: source_id,
@@ -210,21 +401,22 @@ def source_row(
             "SnomedParameters": "fixture",
             "URL": f"Brain/Caudate/{antibody_id}/{image_name}",
             "IF Verification": "enhanced",
-            "locations": "nucleus",
+            "locations": f"loc-{source_id}",
             "IF Organ": "Brain",
-            "nucleus": 1,
         }
     )
     return row
 
 
 def fixture_frames():
-    official_a = source_row(10, "P_HQ_A", "strong", "official-gray.png")
+    official_a = source_row(
+        10, "P_HQ_A", "strong", "official-gray.png", label_code=1
+    )
     official_train = source_row(
-        20, " P_HQ_TRAIN ", "strong", "official-rgb.jpg"
+        20, " P_HQ_TRAIN ", "strong", "official-rgb.jpg", label_code=2
     )
     official_test = source_row(
-        30, "P_HQ_TEST", "strong", "official-rgba.png"
+        30, "P_HQ_TEST", "strong", "official-rgba.png", label_code=3
     )
     supplemental_rows = [
         source_row(
@@ -232,6 +424,7 @@ def fixture_frames():
             "P_HQ_TRAIN",
             "strong",
             "shared.jpg",
+            label_code=4,
             antibody_id="HPA000777",
         ),
         source_row(
@@ -239,11 +432,19 @@ def fixture_frames():
             "P_HQ_TEST",
             "weak",
             "shared.jpg",
+            label_code=5,
             antibody_id="HPA000777",
         ),
-        source_row(42, "P_HQ_TRAIN", "moderate", "white.png"),
-        source_row(43, "P_HQ_TEST", "weak", "unavailable.jpg"),
-        source_row(44, "P_HQ_TRAIN", "moderate", "corrupt.jpg"),
+        source_row(
+            42, "P_HQ_TRAIN", "moderate", "white.png", label_code=6
+        ),
+        source_row(
+            43, "P_HQ_TEST", "weak", "unavailable.jpg", label_code=7
+        ),
+        source_row(
+            44, "P_HQ_TRAIN", "moderate", "corrupt.jpg", label_code=8
+        ),
+        source_row(45, "P_HQ_A", "moderate", "cmyk.jpg", label_code=9),
     ]
     for number in range(10):
         supplemental_rows.append(
@@ -252,6 +453,7 @@ def fixture_frames():
                 f"P_UNKNOWN_{number}",
                 "moderate" if number % 2 == 0 else "weak",
                 f"unknown-{number}.png",
+                label_code=10 + number,
             )
         )
     source = pd.DataFrame(
@@ -324,6 +526,9 @@ def controlled_http_get(url, timeout):
         "white.png": FixtureResponse(image_payload("RGB", (255, 255, 255))),
         "corrupt.jpg": FixtureResponse(
             image_payload("RGB", (11, 22, 33), "JPEG")[:100]
+        ),
+        "cmyk.jpg": FixtureResponse(
+            image_payload("CMYK", (0, 128, 255, 32), "JPEG")
         ),
         "unavailable.jpg": FixtureResponse(b"unavailable", 503),
     }
@@ -602,13 +807,20 @@ class DatasetPipelineEndToEndTest(unittest.TestCase):
                     repeated_final_outputs[dataset]["File Name"].tolist(),
                 )
                 self.assertEqual(
-                    final_frame["File Name"].tolist(),
-                    EXPECTED_FINAL_FILE_NAMES[dataset],
+                    final_frame.to_dict(orient="records"),
+                    EXPECTED_FINAL_RECORDS[dataset],
                 )
-                self.assertEqual(
-                    final_frame["Protein Id"].tolist(),
-                    EXPECTED_FINAL_PROTEIN_IDS[dataset],
+
+            download_report = json.loads(
+                (first_output / "download_audit_report.json").read_text(
+                    encoding="utf-8"
                 )
+            )
+            self.assertEqual(
+                download_report["datasets"], EXPECTED_DOWNLOAD_DATASET_STATS
+            )
+            self.assertEqual(download_report["total_failures"], 3)
+            self.assertEqual(download_report["zero_success_proteins"], 0)
 
             failures = pd.read_csv(first_output / "download_failures.csv").fillna("")
             self.assertEqual(
@@ -616,9 +828,9 @@ class DatasetPipelineEndToEndTest(unittest.TestCase):
             )
             self.assertEqual(set(failures["stage"]), {"blank", "decode", "http"})
             failed_file_names = {
-                "P_HQ_TRAIN-white-HPA000123-nucleus.jpg",
-                "P_HQ_TRAIN-corrupt-HPA000123-nucleus.jpg",
-                "P_HQ_TEST-unavailable-HPA000123-nucleus.jpg",
+                "P_HQ_TRAIN-white-HPA000123-loc-42.jpg",
+                "P_HQ_TRAIN-corrupt-HPA000123-loc-44.jpg",
+                "P_HQ_TEST-unavailable-HPA000123-loc-43.jpg",
             }
             all_final_file_names = set().union(
                 *(set(frame["File Name"]) for frame in final_outputs.values())

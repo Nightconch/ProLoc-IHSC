@@ -1281,6 +1281,86 @@ class DownloadPipelineTest(unittest.TestCase):
             self.assertFalse(report["published"])
             self.assertEqual(report["total_failures"], 1)
 
+    def test_hq_failure_images_are_reused_on_retry(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": (
+                            f"https://fixtures.invalid/{tier}-{split}.jpg"
+                        ),
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        valid_payload = image_bytes("RGB", (10, 20, 30), "JPEG")
+        blank_payload = image_bytes("RGB", (255, 255, 255), "JPEG")
+        hq_train_url = rows_by_dataset[("HQ", "train")][0]["Modified URL"]
+        hq_test_url = rows_by_dataset[("HQ", "test")][0]["Modified URL"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            first_run_urls = []
+
+            def failing_get(url, timeout):
+                self.assertEqual(timeout, 60)
+                first_run_urls.append(url)
+                return FakeResponse(
+                    blank_payload if url == hq_test_url else valid_payload
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "HQ download failed"):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "2",
+                    ],
+                    http_get=failing_get,
+                )
+
+            cached_images = list((output_dir / "HQ_train_img").glob("*.jpg"))
+            self.assertEqual(len(cached_images), 1)
+            self.assertIn(hq_train_url, first_run_urls)
+
+            retry_urls = []
+
+            def successful_get(url, timeout):
+                self.assertEqual(timeout, 60)
+                retry_urls.append(url)
+                return FakeResponse(valid_payload)
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "2",
+                    ],
+                    http_get=successful_get,
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertNotIn(hq_train_url, retry_urls)
+            self.assertIn(hq_test_url, retry_urls)
+            self.assertEqual(
+                pd.read_csv(output_dir / "HQ_train.csv")["Protein Id"].tolist(),
+                [rows_by_dataset[("HQ", "train")][0]["Protein Id"]],
+            )
+
     def test_mq_lq_failures_are_logged_skipped_and_report_zero_success(self):
         rows_by_dataset = {}
         for index, (tier, split) in enumerate(DATASETS, start=1):

@@ -196,6 +196,49 @@ def download_task(
     )
 
 
+def _reusable_image_names(frame: pd.DataFrame, image_dir: Path) -> set[str]:
+    image_dir = Path(image_dir)
+    if image_dir.exists() and not image_dir.is_dir():
+        raise FileExistsError(
+            f"output image directory already exists as a file: {image_dir}"
+        )
+    if not image_dir.exists():
+        return set()
+
+    expected_names = {
+        build_file_name(row) for row in frame.to_dict(orient="records")
+    }
+    allowed_part_names = {f"{name}.part" for name in expected_names}
+    unexpected = sorted(
+        entry.name
+        for entry in image_dir.iterdir()
+        if not entry.is_file()
+        or entry.name not in expected_names | allowed_part_names
+    )
+    if unexpected:
+        raise FileExistsError(
+            "output image already exists; directory contains existing files "
+            "not in manifest: "
+            f"{', '.join(unexpected)}"
+        )
+
+    reusable = set()
+    for name in sorted(expected_names):
+        path = image_dir / name
+        if not path.exists():
+            continue
+        try:
+            with path.open("rb") as cached_file:
+                _validate_nonblank_jpeg_rgb(cached_file, "cached")
+        except (ImageValidationError, OSError) as error:
+            raise FileExistsError(
+                "output image already exists but is not a reusable RGB JPEG: "
+                f"{path}: {error}"
+            ) from error
+        reusable.add(name)
+    return reusable
+
+
 def process_manifest(
     frame: pd.DataFrame,
     tier: str,
@@ -240,30 +283,28 @@ def process_manifest(
             f"filename collision in manifest: {', '.join(collisions)}"
         )
     image_dir = Path(image_dir)
-    if image_dir.exists() and not image_dir.is_dir():
-        raise FileExistsError(
-            f"output image directory already exists as a file: {image_dir}"
-        )
-    existing = (
-        sorted(path.name for path in image_dir.iterdir())
-        if image_dir.exists()
-        else []
-    )
-    if existing:
-        raise FileExistsError(
-            "output image already exists; directory contains existing files: "
-            f"{', '.join(existing)}"
-        )
+    reusable_names = _reusable_image_names(frame, image_dir)
     image_dir.mkdir(parents=True, exist_ok=True)
     tasks = [
         DownloadTask(ordinal, tier, split, row)
         for ordinal, row in enumerate(rows)
     ]
     ordered_results = [None] * len(tasks)
+    pending_tasks = []
+    for task, file_name in zip(tasks, file_names):
+        if file_name in reusable_names:
+            ordered_results[task.ordinal] = DownloadResult(
+                ordinal=task.ordinal,
+                row=task.row,
+                file_name=file_name,
+                success=True,
+            )
+        else:
+            pending_tasks.append(task)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(download_task, task, image_dir, http_get)
-            for task in tasks
+            for task in pending_tasks
         ]
         for future in as_completed(futures):
             result = future.result()
@@ -530,24 +571,11 @@ def preflight_manifests(manifests: dict) -> tuple[dict, pd.DataFrame]:
     )
 
 
-def preflight_image_directories(output_dir: Path) -> None:
+def preflight_image_directories(output_dir: Path, manifests: dict) -> None:
     output_dir = Path(output_dir)
     for tier, split in DATASETS:
         image_dir = output_dir / f"{tier}_{split}_img"
-        if image_dir.exists() and not image_dir.is_dir():
-            raise FileExistsError(
-                f"output image directory already exists as a file: {image_dir}"
-            )
-        existing = (
-            sorted(path.name for path in image_dir.iterdir())
-            if image_dir.exists()
-            else []
-        )
-        if existing:
-            raise FileExistsError(
-                "output image already exists; directory contains existing files: "
-                f"{image_dir}: {', '.join(existing)}"
-            )
+        _reusable_image_names(manifests[(tier, split)], image_dir)
 
 
 def collect_zero_success_proteins(
@@ -739,7 +767,7 @@ def run_download_pipeline(
         prepared_manifests, preflight_failures = preflight_manifests(
             manifests
         )
-        preflight_image_directories(output_dir)
+        preflight_image_directories(output_dir, prepared_manifests)
     except Exception as error:
         _write_csv_atomic(
             pd.DataFrame(columns=DOWNLOAD_FAILURE_COLUMNS),

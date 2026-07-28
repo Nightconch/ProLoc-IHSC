@@ -1,9 +1,12 @@
 import io
+import json
+import os
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -783,6 +786,932 @@ class ManifestOutputTest(unittest.TestCase):
                     "converted_rows": 0,
                 },
             )
+
+
+DATASETS = (
+    ("HQ", "train"),
+    ("HQ", "test"),
+    ("MQ", "train"),
+    ("MQ", "test"),
+    ("LQ", "train"),
+    ("LQ", "test"),
+)
+
+
+def write_pipeline_manifests(manifest_dir, rows_by_dataset):
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    for tier, split in DATASETS:
+        pd.DataFrame(rows_by_dataset[(tier, split)]).to_csv(
+            manifest_dir / f"{tier}_{split}_img_URL.csv",
+            index=False,
+        )
+
+
+class DownloadPipelineTest(unittest.TestCase):
+    def test_main_publishes_six_rgb_datasets(self):
+        payloads = [
+            image_bytes("RGB", (10, 20, 30), "JPEG"),
+            image_bytes("L", 40),
+            image_bytes("CMYK", (0, 128, 255, 0), "JPEG"),
+            rgba_image_bytes(),
+            palette_image_bytes(),
+            image_bytes("RGB", (30, 40, 50), "JPEG"),
+        ]
+        rows_by_dataset = {}
+        payload_by_url = {}
+        expected_proteins = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            protein_id = f"P_{split.upper()}_{tier}"
+            url = f"https://fixtures.invalid/{tier.lower()}-{split}.jpg"
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index * 10,
+                        "Protein Id": protein_id,
+                        "Modified URL": url,
+                        "Antibody Id": f"HPA{index:06d}",
+                        "Sequence": chr(64 + index) * 4,
+                    }
+                )
+            ]
+            payload_by_url[url] = payloads[index - 1]
+            expected_proteins[(tier, split)] = protein_id
+
+        shared_url = rows_by_dataset[("HQ", "train")][0]["Modified URL"]
+        rows_by_dataset[("MQ", "test")][0]["Modified URL"] = shared_url
+        requested_urls = []
+
+        def fake_get(url, timeout):
+            self.assertEqual(timeout, 60)
+            requested_urls.append(url)
+            return FakeResponse(payload_by_url[url])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+            upstream_report = {
+                "status": "ok",
+                "published": True,
+                "record_id": "10632698",
+                "seed": 73,
+                "source_validation": {
+                    "status": "ok",
+                    "sources": {
+                        "normalLabeled.csv": {"md5": "normal-md5"},
+                        "data_train.csv": {"md5": "train-md5"},
+                        "data_test.csv": {"md5": "test-md5"},
+                    },
+                },
+            }
+            (manifest_dir / "manifest_generation_report.json").write_text(
+                json.dumps(upstream_report), encoding="utf-8"
+            )
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "2",
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["protein_id_overlap"], 0)
+            for tier, split in DATASETS:
+                frame = pd.read_csv(output_dir / f"{tier}_{split}.csv")
+                self.assertEqual(frame.columns.tolist(), download.FINAL_COLUMNS)
+                self.assertEqual(
+                    frame["Protein Id"].tolist(),
+                    [expected_proteins[(tier, split)]],
+                )
+                image_path = output_dir / f"{tier}_{split}_img" / frame.loc[0, "File Name"]
+                with Image.open(image_path) as image:
+                    image.load()
+                    self.assertEqual(image.format, "JPEG")
+                    self.assertEqual(image.mode, "RGB")
+                    self.assertEqual(len(image.getbands()), 3)
+
+            train_ids = {
+                expected_proteins[(tier, "train")] for tier in ("HQ", "MQ", "LQ")
+            }
+            test_ids = {
+                expected_proteins[(tier, "test")] for tier in ("HQ", "MQ", "LQ")
+            }
+            self.assertEqual(train_ids & test_ids, set())
+            self.assertEqual(requested_urls.count(shared_url), 2)
+
+    def test_hq_success_preserves_official_count_and_order(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{index}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        rows_by_dataset[("HQ", "train")] = [
+            manifest_row(
+                **{
+                    "Unnamed: 0": 20,
+                    "Protein Id": "P_OFFICIAL_SECOND",
+                    "Modified URL": "https://fixtures.invalid/slow.jpg",
+                    "Antibody Id": "HPA000020",
+                }
+            ),
+            manifest_row(
+                **{
+                    "Unnamed: 0": 10,
+                    "Protein Id": "P_OFFICIAL_FIRST",
+                    "Modified URL": "https://fixtures.invalid/fast.jpg",
+                    "Antibody Id": "HPA000010",
+                }
+            ),
+        ]
+        fast_started = threading.Event()
+        payload = image_bytes("RGB", (10, 20, 30), "JPEG")
+
+        def fake_get(url, timeout):
+            self.assertEqual(timeout, 60)
+            if url.endswith("slow.jpg"):
+                if not fast_started.wait(timeout=2):
+                    raise AssertionError("HQ rows were not downloaded concurrently")
+            elif url.endswith("fast.jpg"):
+                fast_started.set()
+            return FakeResponse(payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "2",
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(exit_code, 0)
+            hq_train = pd.read_csv(output_dir / "HQ_train.csv")
+            self.assertEqual(len(hq_train), 2)
+            self.assertEqual(
+                hq_train["Protein Id"].tolist(),
+                ["P_OFFICIAL_SECOND", "P_OFFICIAL_FIRST"],
+            )
+            self.assertEqual(
+                len(list((output_dir / "HQ_train_img").glob("*.jpg"))),
+                2,
+            )
+
+    def test_preflight_rejects_cross_manifest_protein_overlap_before_http(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index,
+                        "Protein Id": f"P{index}",
+                        "Modified URL": f"https://fixtures.invalid/{index}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        rows_by_dataset[("HQ", "train")][0]["Protein Id"] = "P_SHARED"
+        rows_by_dataset[("LQ", "test")][0]["Protein Id"] = " P_SHARED "
+        http_calls = []
+
+        def fake_get(*args, **kwargs):
+            http_calls.append((args, kwargs))
+            return FakeResponse(image_bytes("RGB", (10, 20, 30), "JPEG"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            with self.assertRaisesRegex(
+                AssertionError,
+                "Protein Id overlap between train and test.*P_SHARED",
+            ):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(http_calls, [])
+            self.assertFalse(
+                any((output_dir / f"{tier}_{split}.csv").exists() for tier, split in DATASETS)
+            )
+
+    def test_preflight_rejects_global_filename_collision_before_http(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{index}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        colliding = manifest_row(
+            **{
+                "Protein Id": "P_COLLISION",
+                "Modified URL": "https://fixtures.invalid/shared.jpg",
+                "Antibody Id": "HPA999999",
+                "locations": "nucleus",
+            }
+        )
+        rows_by_dataset[("HQ", "train")][0].update(colliding)
+        rows_by_dataset[("MQ", "train")][0].update(colliding)
+        http_calls = []
+
+        def fake_get(*args, **kwargs):
+            http_calls.append((args, kwargs))
+            return FakeResponse(image_bytes("RGB", (10, 20, 30), "JPEG"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            with self.assertRaisesRegex(ValueError, "global filename collision"):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(http_calls, [])
+            self.assertFalse(
+                any((output_dir / f"{tier}_{split}.csv").exists() for tier, split in DATASETS)
+            )
+
+    def test_preflight_checks_all_image_directories_before_http(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{index}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        http_calls = []
+
+        def fake_get(*args, **kwargs):
+            http_calls.append((args, kwargs))
+            return FakeResponse(image_bytes("RGB", (10, 20, 30), "JPEG"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+            stale_dir = output_dir / "LQ_test_img"
+            stale_dir.mkdir(parents=True)
+            stale_image = stale_dir / "existing.jpg"
+            stale_image.write_bytes(b"existing")
+
+            with self.assertRaisesRegex(FileExistsError, "already exists"):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(http_calls, [])
+            self.assertEqual(stale_image.read_bytes(), b"existing")
+            self.assertEqual(
+                sorted(path.name for path in output_dir.iterdir()),
+                [
+                    "LQ_test_img",
+                    "download_audit_report.json",
+                    "download_failures.csv",
+                    "zero_success_proteins.csv",
+                ],
+            )
+            report = json.loads(
+                (output_dir / "download_audit_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "error")
+            self.assertFalse(report["published"])
+
+    def test_preflight_loads_all_six_schemas_before_http(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{index}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        del rows_by_dataset[("LQ", "test")][0]["Sequence"]
+        http_calls = []
+
+        def fake_get(*args, **kwargs):
+            http_calls.append((args, kwargs))
+            return FakeResponse(image_bytes("RGB", (10, 20, 30), "JPEG"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            with self.assertRaisesRegex(ValueError, "Sequence"):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(http_calls, [])
+            self.assertFalse(
+                any(
+                    (output_dir / f"{tier}_{split}.csv").exists()
+                    for tier, split in DATASETS
+                )
+            )
+            self.assertFalse(
+                any(
+                    (output_dir / f"{tier}_{split}_img").exists()
+                    for tier, split in DATASETS
+                )
+            )
+            report = json.loads(
+                (output_dir / "download_audit_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "error")
+            self.assertFalse(report["published"])
+            self.assertEqual(report["error"]["type"], "ValueError")
+            self.assertIn("Sequence", report["error"]["message"])
+            self.assertTrue(
+                pd.read_csv(output_dir / "download_failures.csv").empty
+            )
+
+    def test_hq_failure_aborts_formal_publication(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index * 10,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{tier}-{split}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        blank_row = manifest_row(
+            **{
+                "Unnamed: 0": 99,
+                "Protein Id": "P_HQ_BLANK",
+                "Modified URL": "https://fixtures.invalid/hq-blank.jpg",
+                "Antibody Id": "HPA999999",
+            }
+        )
+        rows_by_dataset[("HQ", "train")].append(blank_row)
+        requested_urls = []
+        valid_payload = image_bytes("RGB", (10, 20, 30), "JPEG")
+        blank_payload = image_bytes("RGB", (255, 255, 255), "JPEG")
+
+        def fake_get(url, timeout):
+            self.assertEqual(timeout, 60)
+            requested_urls.append(url)
+            return FakeResponse(
+                blank_payload if url.endswith("hq-blank.jpg") else valid_payload
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+            output_dir.mkdir()
+            old_hq = {
+                "HQ_train.csv": b"old-hq-train\n",
+                "HQ_test.csv": b"old-hq-test\n",
+            }
+            for filename, payload in old_hq.items():
+                (output_dir / filename).write_bytes(payload)
+
+            with self.assertRaisesRegex(RuntimeError, "HQ download failed"):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "2",
+                    ],
+                    http_get=fake_get,
+                )
+
+            for filename, payload in old_hq.items():
+                self.assertEqual((output_dir / filename).read_bytes(), payload)
+            failures = pd.read_csv(output_dir / "download_failures.csv")
+            self.assertEqual(failures["tier"].tolist(), ["HQ"])
+            self.assertEqual(failures["split"].tolist(), ["train"])
+            self.assertEqual(failures["source_row"].tolist(), [99])
+            self.assertEqual(failures["Protein Id"].tolist(), ["P_HQ_BLANK"])
+            self.assertEqual(failures["stage"].tolist(), ["blank"])
+            self.assertTrue(failures.loc[0, "reason"])
+            self.assertFalse(
+                any("MQ-" in url or "LQ-" in url for url in requested_urls)
+            )
+            report = json.loads(
+                (output_dir / "download_audit_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "error")
+            self.assertFalse(report["published"])
+            self.assertEqual(report["total_failures"], 1)
+
+    def test_mq_lq_failures_are_logged_skipped_and_report_zero_success(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index * 10,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{tier}-{split}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        rows_by_dataset[("MQ", "train")] = [
+            manifest_row(
+                **{
+                    "Unnamed: 0": 31,
+                    "Protein Id": "P_MQ_FIRST",
+                    "Modified URL": "https://fixtures.invalid/mq-first.jpg",
+                    "Antibody Id": "HPA000031",
+                }
+            ),
+            manifest_row(
+                **{
+                    "Unnamed: 0": 32,
+                    "Protein Id": "P_MQ_ZERO",
+                    "Modified URL": "https://fixtures.invalid/mq-http-failure.jpg",
+                    "Antibody Id": "HPA000032",
+                }
+            ),
+            manifest_row(
+                **{
+                    "Unnamed: 0": 33,
+                    "Protein Id": "P_MQ_SECOND",
+                    "Modified URL": "https://fixtures.invalid/mq-second.jpg",
+                    "Antibody Id": "HPA000033",
+                }
+            ),
+        ]
+        rows_by_dataset[("LQ", "test")] = [
+            manifest_row(
+                **{
+                    "Unnamed: 0": 61,
+                    "Protein Id": "P_LQ_ZERO",
+                    "Modified URL": "https://fixtures.invalid/lq-decode-failure.jpg",
+                    "Antibody Id": "HPA000061",
+                }
+            )
+        ]
+        valid_payload = image_bytes("RGB", (10, 20, 30), "JPEG")
+
+        def fake_get(url, timeout):
+            self.assertEqual(timeout, 60)
+            if url.endswith("mq-http-failure.jpg"):
+                return FakeResponse(b"unavailable", 503)
+            if url.endswith("lq-decode-failure.jpg"):
+                return FakeResponse(b"not an image")
+            return FakeResponse(valid_payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            upstream_report = {
+                "status": "ok",
+                "published": True,
+                "record_id": "10632698",
+                "seed": 73,
+                "source_validation": {
+                    "status": "ok",
+                    "sources": {
+                        "normalLabeled.csv": {"md5": "normal-md5"},
+                        "data_train.csv": {"md5": "train-md5"},
+                        "data_test.csv": {"md5": "test-md5"},
+                    },
+                },
+            }
+            (manifest_dir / "manifest_generation_report.json").write_text(
+                json.dumps(upstream_report), encoding="utf-8"
+            )
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                        "--workers",
+                        "3",
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(exit_code, 0)
+            mq_train = pd.read_csv(output_dir / "MQ_train.csv")
+            self.assertEqual(
+                mq_train["Protein Id"].tolist(),
+                ["P_MQ_FIRST", "P_MQ_SECOND"],
+            )
+            self.assertTrue(pd.read_csv(output_dir / "LQ_test.csv").empty)
+            failures = pd.read_csv(output_dir / "download_failures.csv")
+            self.assertEqual(
+                list(zip(failures["tier"], failures["split"])),
+                [("MQ", "train"), ("LQ", "test")],
+            )
+            self.assertEqual(
+                failures["Protein Id"].tolist(),
+                ["P_MQ_ZERO", "P_LQ_ZERO"],
+            )
+            self.assertEqual(failures["stage"].tolist(), ["http", "decode"])
+            zero_success = pd.read_csv(
+                output_dir / "zero_success_proteins.csv"
+            )
+            self.assertEqual(
+                zero_success.to_dict("records"),
+                [
+                    {
+                        "tier": "MQ",
+                        "split": "train",
+                        "Protein Id": "P_MQ_ZERO",
+                        "input_rows": 1,
+                    },
+                    {
+                        "tier": "LQ",
+                        "split": "test",
+                        "Protein Id": "P_LQ_ZERO",
+                        "input_rows": 1,
+                    },
+                ],
+            )
+            report = json.loads(
+                (output_dir / "download_audit_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["status"], "ok")
+            self.assertTrue(report["published"])
+            self.assertEqual(report["total_failures"], 2)
+            self.assertEqual(report["zero_success_proteins"], 2)
+            self.assertEqual(
+                report["upstream"]["manifest_generation_report"],
+                upstream_report,
+            )
+            self.assertIsNone(
+                report["upstream"]["source_validation_report"]
+            )
+            self.assertEqual(
+                report["datasets"]["MQ_train"],
+                {
+                    "input_rows": 3,
+                    "success_rows": 2,
+                    "failure_rows": 1,
+                    "converted_rows": 0,
+                },
+            )
+            self.assertEqual(
+                [failure["Protein Id"] for failure in report["failures"]],
+                ["P_MQ_ZERO", "P_LQ_ZERO"],
+            )
+            self.assertEqual(
+                report["zero_success_details"],
+                zero_success.to_dict("records"),
+            )
+            self.assertTrue(report["protein_id_leakage"]["checked"])
+            self.assertEqual(report["protein_id_leakage"]["overlap"], [])
+
+    def test_hq_sequence_failure_is_reported_before_http(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index * 10,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{tier}-{split}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        rows_by_dataset[("HQ", "test")][0]["Sequence"] = "   "
+        rows_by_dataset[("MQ", "train")][0]["Modified URL"] = "   "
+        http_calls = []
+
+        def fake_get(*args, **kwargs):
+            http_calls.append((args, kwargs))
+            return FakeResponse(image_bytes("RGB", (10, 20, 30), "JPEG"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+            output_dir.mkdir()
+            old_train = b"old-hq-train\n"
+            old_test = b"old-hq-test\n"
+            (output_dir / "HQ_train.csv").write_bytes(old_train)
+            (output_dir / "HQ_test.csv").write_bytes(old_test)
+
+            with self.assertRaisesRegex(RuntimeError, "HQ download failed"):
+                download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(http_calls, [])
+            self.assertEqual(
+                (output_dir / "HQ_train.csv").read_bytes(), old_train
+            )
+            self.assertEqual(
+                (output_dir / "HQ_test.csv").read_bytes(), old_test
+            )
+            failures = pd.read_csv(output_dir / "download_failures.csv")
+            self.assertEqual(len(failures), 2)
+            self.assertEqual(failures["tier"].tolist(), ["HQ", "MQ"])
+            self.assertEqual(failures["split"].tolist(), ["test", "train"])
+            self.assertEqual(failures["stage"].tolist(), ["sequence", "url"])
+            self.assertEqual(
+                failures["Protein Id"].tolist(),
+                ["P_test_2", "P_train_3"],
+            )
+            report = json.loads(
+                (output_dir / "download_audit_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(report["total_failures"], 2)
+            self.assertEqual(len(report["failures"]), 2)
+
+    def test_mq_lq_sequence_and_url_preflight_failures_skip_rows(self):
+        rows_by_dataset = {}
+        for index, (tier, split) in enumerate(DATASETS, start=1):
+            rows_by_dataset[(tier, split)] = [
+                manifest_row(
+                    **{
+                        "Unnamed: 0": index * 10,
+                        "Protein Id": f"P_{split}_{index}",
+                        "Modified URL": f"https://fixtures.invalid/{tier}-{split}.jpg",
+                        "Antibody Id": f"HPA{index:06d}",
+                    }
+                )
+            ]
+        rows_by_dataset[("MQ", "train")].insert(
+            0,
+            manifest_row(
+                **{
+                    "Unnamed: 0": 31,
+                    "Protein Id": "P_MQ_NO_SEQUENCE",
+                    "Modified URL": "https://fixtures.invalid/mq-no-sequence.jpg",
+                    "Antibody Id": "HPA000031",
+                    "Sequence": " ",
+                }
+            ),
+        )
+        rows_by_dataset[("LQ", "test")].insert(
+            0,
+            manifest_row(
+                **{
+                    "Unnamed: 0": 61,
+                    "Protein Id": "P_LQ_NO_URL",
+                    "Modified URL": " ",
+                    "Antibody Id": "HPA000061",
+                }
+            ),
+        )
+        requested_urls = []
+        valid_payload = image_bytes("RGB", (10, 20, 30), "JPEG")
+
+        def fake_get(url, timeout):
+            self.assertEqual(timeout, 60)
+            requested_urls.append(url)
+            return FakeResponse(valid_payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_dir = root / "manifests"
+            output_dir = root / "output"
+            write_pipeline_manifests(manifest_dir, rows_by_dataset)
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = download.main(
+                    [
+                        "--manifest-dir",
+                        str(manifest_dir),
+                        "--output-dir",
+                        str(output_dir),
+                    ],
+                    http_get=fake_get,
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertNotIn(
+                "https://fixtures.invalid/mq-no-sequence.jpg",
+                requested_urls,
+            )
+            self.assertNotIn("", [url.strip() for url in requested_urls])
+            failures = pd.read_csv(output_dir / "download_failures.csv")
+            self.assertEqual(
+                failures["Protein Id"].tolist(),
+                ["P_MQ_NO_SEQUENCE", "P_LQ_NO_URL"],
+            )
+            self.assertEqual(failures["stage"].tolist(), ["sequence", "url"])
+            zero_success = pd.read_csv(
+                output_dir / "zero_success_proteins.csv"
+            )
+            self.assertEqual(
+                list(zip(zero_success["tier"], zero_success["split"])),
+                [("MQ", "train"), ("LQ", "test")],
+            )
+            self.assertEqual(
+                zero_success["Protein Id"].tolist(),
+                ["P_MQ_NO_SEQUENCE", "P_LQ_NO_URL"],
+            )
+
+
+class FinalManifestPublicationTest(unittest.TestCase):
+    def _empty_frames(self):
+        return {
+            dataset: pd.DataFrame(columns=download.FINAL_COLUMNS)
+            for dataset in DATASETS
+        }
+
+    def test_success_guard_rejects_normalized_protein_overlap(self):
+        frames = self._empty_frames()
+        base = {
+            "File Name": "image.jpg",
+            "locations": "nucleus",
+            "cytoplasm": 0,
+            "endoplasmic reticulum": 0,
+            "mitochondria": 0,
+            "nucleus": 1,
+            "plasma membrane": 0,
+            "Sequence": "AAAA",
+        }
+        frames[("HQ", "train")] = pd.DataFrame(
+            [{**base, "Protein Id": "P1"}], columns=download.FINAL_COLUMNS
+        )
+        frames[("MQ", "test")] = pd.DataFrame(
+            [{**base, "Protein Id": " P1 "}], columns=download.FINAL_COLUMNS
+        )
+
+        with self.assertRaisesRegex(
+            AssertionError,
+            "Protein Id overlap between successful train and test.*P1",
+        ):
+            download.assert_success_protein_disjoint(frames)
+
+    def test_bundle_publish_rolls_back_all_six_csvs(self):
+        frames = {}
+        for index, dataset in enumerate(DATASETS, start=1):
+            row = manifest_row(**{"Protein Id": f"P{index}"})
+            frames[dataset] = pd.DataFrame(
+                [
+                    {
+                        "File Name": f"image-{index}.jpg",
+                        "locations": row["locations"],
+                        "cytoplasm": row["cytoplasm"],
+                        "endoplasmic reticulum": row[
+                            "endoplasmic reticulum"
+                        ],
+                        "mitochondria": row["mitochondria"],
+                        "nucleus": row["nucleus"],
+                        "plasma membrane": row["plasma membrane"],
+                        "Sequence": row["Sequence"],
+                        "Protein Id": row["Protein Id"],
+                    }
+                ],
+                columns=download.FINAL_COLUMNS,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            old_payloads = {}
+            for tier, split in DATASETS:
+                path = output_dir / f"{tier}_{split}.csv"
+                payload = f"old-{tier}-{split}\n".encode()
+                path.write_bytes(payload)
+                old_payloads[path] = payload
+
+            published_replacements = 0
+
+            def fail_second_publish(source, destination):
+                nonlocal published_replacements
+                if source.parent.name.startswith(".final-csv-staging-"):
+                    published_replacements += 1
+                    if published_replacements == 2:
+                        raise OSError("second publish failed")
+                return os.replace(source, destination)
+
+            with self.assertRaisesRegex(OSError, "second publish failed"):
+                download.publish_final_manifests(
+                    frames,
+                    output_dir,
+                    replace=fail_second_publish,
+                )
+
+            for path, payload in old_payloads.items():
+                self.assertEqual(path.read_bytes(), payload)
+            self.assertEqual(
+                [
+                    path.name
+                    for path in output_dir.iterdir()
+                    if path.name.startswith(".final-csv-staging-")
+                    or ".backup-" in path.name
+                    or path.name.endswith(".part")
+                ],
+                [],
+            )
+
+
+class DownloadCliTest(unittest.TestCase):
+    def test_script_help_exposes_six_manifest_arguments(self):
+        result = subprocess.run(
+            [sys.executable, str(Path(download.__file__).resolve()), "--help"],
+            cwd=Path(download.__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--manifest-dir", result.stdout)
+        self.assertIn("--output-dir", result.stdout)
+        self.assertIn("--workers", result.stdout)
 
 
 @contextmanager

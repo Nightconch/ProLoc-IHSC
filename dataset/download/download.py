@@ -14,15 +14,19 @@ def is_blank_rgb(image: Image.Image, threshold: int = 250) -> bool:
     return all(low >= threshold for low, _high in image.getextrema())
 
 
-def _validate_jpeg_rgb(source, stage: str) -> None:
+def _is_rgb_jpeg(image: Image.Image) -> bool:
+    return (
+        image.format == "JPEG"
+        and image.mode == "RGB"
+        and len(image.getbands()) == 3
+    )
+
+
+def _validate_nonblank_jpeg_rgb(source, stage: str) -> None:
     try:
         with Image.open(source) as checked:
             checked.load()
-            if (
-                checked.format != "JPEG"
-                or checked.mode != "RGB"
-                or len(checked.getbands()) != 3
-            ):
+            if not _is_rgb_jpeg(checked):
                 raise ImageValidationError(
                     f"{stage} image is not JPEG RGB with three bands"
                 )
@@ -40,11 +44,7 @@ def normalized_jpeg_bytes(payload: bytes) -> tuple[bytes, bool]:
     try:
         with Image.open(io.BytesIO(payload)) as source:
             source.load()
-            preserves_original = (
-                source.format == "JPEG"
-                and source.mode == "RGB"
-                and len(source.getbands()) == 3
-            )
+            preserves_original = _is_rgb_jpeg(source)
             if preserves_original:
                 rgb = source
             elif (
@@ -74,7 +74,7 @@ def normalized_jpeg_bytes(payload: bytes) -> tuple[bytes, bool]:
     except Exception as error:
         raise ImageValidationError(f"image decode failed: {error}") from error
 
-    _validate_jpeg_rgb(io.BytesIO(candidate), "final")
+    _validate_nonblank_jpeg_rgb(io.BytesIO(candidate), "final")
 
     return candidate, converted
 
@@ -87,7 +87,7 @@ def write_validated_image(payload: bytes, path: Path) -> bool:
     part_path.unlink(missing_ok=True)
     try:
         part_path.write_bytes(candidate)
-        _validate_jpeg_rgb(part_path, "written")
+        _validate_nonblank_jpeg_rgb(part_path, "written")
         part_path.replace(path)
         return converted
     finally:

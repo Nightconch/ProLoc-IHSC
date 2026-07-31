@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedGroupKFold
 from model import CrossAttentionModel
 from metrics import compute_co_occurrence_matrix, compute_co_occurrence_matrix_cos
 from vit import ViTFeatureExtractorModel
@@ -23,6 +23,65 @@ from prott5 import ProteinEmbeddingExtractor
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
+
+
+def split_by_protein(labels, protein_ids, n_splits=10, random_state=42):
+    """Split sample indices while keeping every protein on only one side."""
+    labels_array = np.asarray(labels)
+    protein_series = pd.Series(protein_ids, dtype="object")
+
+    if labels_array.ndim != 2:
+        raise ValueError("labels must be a two-dimensional array")
+    if len(labels_array) != len(protein_series):
+        raise ValueError(
+            "labels and protein_ids must contain the same number of samples"
+        )
+    if protein_series.isna().any():
+        raise ValueError("Protein Id contains missing values")
+
+    protein_series = protein_series.astype(str).str.strip()
+    if protein_series.eq("").any():
+        raise ValueError("Protein Id contains blank values")
+
+    protein_count = protein_series.nunique()
+    if protein_count < n_splits:
+        raise ValueError(
+            f"at least {n_splits} distinct proteins are required, "
+            f"but found {protein_count}"
+        )
+
+    protein_array = protein_series.to_numpy()
+    label_strings = np.asarray(
+        ["".join(map(str, row.astype(int))) for row in labels_array]
+    )
+    indices = np.arange(len(labels_array))
+    splitter = StratifiedGroupKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=random_state,
+    )
+    train_indices, val_indices = next(
+        splitter.split(
+            indices,
+            y=label_strings,
+            groups=protein_array,
+        )
+    )
+
+    train_proteins = set(protein_array[train_indices])
+    val_proteins = set(protein_array[val_indices])
+    if not train_proteins.isdisjoint(val_proteins):
+        raise RuntimeError(
+            "protein-group split leaked proteins across train and validation"
+        )
+
+    combined_indices = np.concatenate([train_indices, val_indices])
+    if not np.array_equal(np.sort(combined_indices), indices):
+        raise RuntimeError(
+            "protein-group split did not preserve every sample exactly once"
+        )
+
+    return train_indices, val_indices
 
 
 class DeferredTee:
@@ -388,19 +447,35 @@ if __name__ == '__main__':
         raise ValueError(f"序列特征文件包含 {len(seq_features)} 个样本，少于标签文件的 {num_samples} 个样本")
     
 
-    # 进行分层抽样，按照9:1比例划分训练集和验证集
-    label_strings = [''.join(map(str, row.astype(int))) for row in labels.numpy()]
-    indices = np.arange(num_samples)
+    # 按蛋白质分组进行分层划分，避免同一蛋白质泄漏到训练集和验证集
+    protein_column = "Protein Id"
+    if protein_column not in label_df.columns:
+        raise ValueError(
+            f"训练标签文件缺少必需列 {protein_column!r}；"
+            f"现有列: {list(label_df.columns)}"
+        )
 
-    train_indices, val_indices = train_test_split(
-        indices,
-        test_size=0.1,
-        stratify=label_strings,
-        random_state=42
+    protein_ids = label_df[protein_column]
+    train_indices, val_indices = split_by_protein(
+        labels.numpy(),
+        protein_ids,
+        n_splits=10,
+        random_state=seed,
     )
 
-    # print(f"训练集样本数: {len(train_indices)}")
-    # print(f"验证集样本数: {len(val_indices)}")
+    normalized_protein_ids = protein_ids.astype(str).str.strip().to_numpy()
+    train_protein_count = len(set(normalized_protein_ids[train_indices]))
+    val_protein_count = len(set(normalized_protein_ids[val_indices]))
+    train_percentage = 100.0 * len(train_indices) / num_samples
+    val_percentage = 100.0 * len(val_indices) / num_samples
+    print(
+        f"训练集: {len(train_indices)} 个样本, "
+        f"{train_protein_count} 个蛋白质 ({train_percentage:.2f}%)"
+    )
+    print(
+        f"验证集: {len(val_indices)} 个样本, "
+        f"{val_protein_count} 个蛋白质 ({val_percentage:.2f}%)"
+    )
 
     # ==================== 基于训练集样本计算标签共现矩阵 ====================
     labels_np_train = labels[train_indices].numpy()

@@ -1,4 +1,5 @@
 import importlib
+import math
 import sys
 import types
 
@@ -97,3 +98,35 @@ def test_training_isc_uses_duplicate_ids_from_indexed_dataset_batch():
     assert batch_protein_ids == ("P53", "P53", "BRCA1")
     assert isc_loss.item() < 1e-5
     assert mean_positives_per_anchor.item() == pytest.approx(5 / 3)
+
+
+def test_validation_isc_accumulator_is_protein_aware_and_sample_weighted():
+    """Break caught: diagonal ISC or omitted final-batch accounting skews validation ISC."""
+    first_image_embeddings = torch.eye(3)
+    first_sequence_embeddings = torch.eye(3)
+    final_image_embeddings = torch.eye(2)
+    final_sequence_embeddings = torch.tensor(
+        [[0.0, 1.0], [1.0, 0.0]]
+    )
+
+    _, weighted_loss, processed_samples = train.accumulate_validation_isc(
+        0.0,
+        0,
+        first_image_embeddings,
+        first_sequence_embeddings,
+        ("P53", "BRCA1", "EGFR"),
+        temperature=1.0,
+    )
+    _, weighted_loss, processed_samples = train.accumulate_validation_isc(
+        weighted_loss,
+        processed_samples,
+        final_image_embeddings,
+        final_sequence_embeddings,
+        ("TP53", "TP53"),
+        temperature=1.0,
+    )
+
+    expected_epoch_isc = 3 * math.log(1 + 2 * math.exp(-1)) / 5
+
+    assert processed_samples == 5
+    assert weighted_loss / processed_samples == pytest.approx(expected_epoch_isc)

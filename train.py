@@ -256,18 +256,6 @@ def multi_task_loss(logits, probs, labels, adaptive_soft_weights=None, label_rel
     return total_loss, loss_dict
 
 
-def isc_contrastive_loss(image_embeddings, sequence_embeddings, temperature=0.07):
-    image_norm = nn.functional.normalize(image_embeddings, p=2, dim=1)
-    sequence_norm = nn.functional.normalize(sequence_embeddings, p=2, dim=1)
-    logits = torch.matmul(image_norm, sequence_norm.t()) / temperature
-    batch_size = logits.size(0)
-    target = torch.arange(batch_size, device=logits.device)
-    loss_i2t = nn.functional.cross_entropy(logits, target)
-    loss_t2i = nn.functional.cross_entropy(logits.t(), target)
-    loss = (loss_i2t + loss_t2i) * 0.5
-    return loss
-
-
 class CustomDataset(Dataset):
     def __init__(
         self,
@@ -326,6 +314,28 @@ def training_isc_metrics(
     )
     mean_positives_per_anchor = positive_relation.sum(dim=1).float().mean()
     return isc_loss, mean_positives_per_anchor
+
+
+def accumulate_validation_isc(
+    weighted_loss,
+    processed_samples,
+    image_embeddings,
+    sequence_embeddings,
+    protein_ids,
+    temperature=0.07,
+):
+    batch_loss = protein_aware_isc_loss(
+        image_embeddings,
+        sequence_embeddings,
+        protein_ids,
+        temperature=temperature,
+    )
+    batch_size = image_embeddings.size(0)
+    return (
+        batch_loss,
+        weighted_loss + batch_loss.item() * batch_size,
+        processed_samples + batch_size,
+    )
 
 
 class EarlyStopping:
@@ -756,6 +766,7 @@ if __name__ == '__main__':
         model.eval()
         running_val_loss = 0.0
         running_val_isc_loss = 0.0
+        processed_val_samples = 0
         
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validation", leave=False, disable=True):
@@ -795,13 +806,20 @@ if __name__ == '__main__':
                     sequence_features=seq_feat,
                     attention_mask=attn_mask
                 )
-                isc_loss = isc_contrastive_loss(image_global, sequence_global, temperature=isc_temperature)
+                batch_size = seq_feat.size(0)
+                isc_loss, running_val_isc_loss, processed_val_samples = accumulate_validation_isc(
+                    running_val_isc_loss,
+                    processed_val_samples,
+                    image_global,
+                    sequence_global,
+                    batch_protein_ids,
+                    temperature=isc_temperature,
+                )
                 total_loss = total_loss + isc_loss_weight * isc_loss
-                
-                running_val_loss += total_loss.item() * seq_feat.size(0)
+                running_val_loss += total_loss.item() * batch_size
 
         epoch_val_loss = running_val_loss / len(val_dataset)
-        epoch_val_isc_loss = running_val_isc_loss / len(val_dataset)
+        epoch_val_isc_loss = running_val_isc_loss / processed_val_samples
         
         print(f"  Train Loss: {epoch_train_loss:.4f} (Main: {epoch_main_loss:.4f}, Minority_Class: {epoch_Minority_Class_loss:.4f}, Label_Relation: {epoch_Label_Relation_loss:.4f}, isc: {epoch_train_isc_loss:.4f}, positives/anchor: {epoch_mean_positives_per_anchor:.4f})")
         print(f"  Val Loss: {epoch_val_loss:.4f}")

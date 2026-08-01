@@ -99,3 +99,48 @@ Result: `101 passed, 23 subtests passed in 12.35s`.
 
 - Missing (`None` or `NaN`) and blank values remain explicit `ValueError` cases.
 - The change is limited to normalization; loss reduction and live training/validation loops remain unchanged.
+
+## Fix round 2 — non-native scalar NaN IDs
+
+### What changed
+
+- Added a scalar `math.isnan` check before text conversion, so native and NumPy floating-point NaN IDs are both explicit missing-value errors.
+- Added direct coverage for `np.float32("nan")` while retaining numeric-ID acceptance.
+- The deferred empty-collection Minor remains intentionally unchanged.
+
+### TDD evidence
+
+#### RED
+
+Command:
+
+```powershell
+rtk proxy C:\Users\87279\miniconda3\envs\psl\python.exe -m pytest tests\test_protein_aware_isc.py -q
+```
+
+Result: `1 failed, 8 passed in 2.81s`. The new NumPy scalar-NaN test failed for the expected reason: `Failed: DID NOT RAISE ValueError`.
+
+#### GREEN
+
+Command:
+
+```powershell
+rtk proxy C:\Users\87279\miniconda3\envs\psl\python.exe -m pytest tests\test_protein_aware_isc.py -q
+```
+
+Result: `9 passed in 2.82s`.
+
+### Full verification
+
+Command:
+
+```powershell
+rtk proxy C:\Users\87279\miniconda3\envs\psl\python.exe -m pytest -q
+```
+
+Result: `102 passed, 23 subtests passed in 12.27s`.
+
+### Fix self-review
+
+- `math.isnan` accepts NumPy floating scalar values and leaves valid numeric identifiers such as `123` convertible to text.
+- The change precedes `str(...)`, preventing missing numeric sentinel values from becoming the literal ID `"nan"`.

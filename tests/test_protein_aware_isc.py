@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pytest
 import torch
 import torch.nn.functional as functional
@@ -35,6 +36,12 @@ def test_positive_relation_converts_numeric_ids_to_trimmed_text():
             [[True, True, False], [True, True, False], [False, False, True]]
         ),
     )
+
+
+def test_positive_relation_rejects_numpy_scalar_nan_ids():
+    """Break caught: stringifying scalar NaN accepts a missing identifier."""
+    with pytest.raises(ValueError, match="missing"):
+        protein_positive_relation(["P53", np.float32("nan")])
 
 
 @pytest.mark.parametrize(

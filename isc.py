@@ -12,9 +12,11 @@ def _normalize_protein_ids(protein_ids):
 
     normalized_ids = []
     for index, protein_id in enumerate(protein_ids):
-        if protein_id is None or (
-            isinstance(protein_id, float) and math.isnan(protein_id)
-        ):
+        try:
+            is_nan = math.isnan(protein_id)
+        except TypeError:
+            is_nan = False
+        if protein_id is None or is_nan:
             raise ValueError(f"Protein ID at index {index} is missing")
         normalized_id = str(protein_id).strip()
         if not normalized_id:

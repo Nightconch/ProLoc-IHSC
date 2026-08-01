@@ -303,13 +303,22 @@ class CustomDataset(Dataset):
 
 
 def training_isc_metrics(
-    image_embeddings, sequence_embeddings, protein_ids, temperature=0.07
+    image_embeddings,
+    sequence_embeddings,
+    image_protein_ids,
+    sequence_protein_ids,
+    temperature=0.07,
 ):
-    positive_relation = protein_positive_relation(protein_ids)
+    positive_relation = protein_positive_relation(
+        image_protein_ids,
+        sequence_protein_ids,
+        device=image_embeddings.device,
+    )
     isc_loss = protein_aware_isc_loss(
         image_embeddings,
         sequence_embeddings,
-        protein_ids,
+        image_protein_ids,
+        sequence_protein_ids,
         temperature=temperature,
     )
     mean_positives_per_anchor = positive_relation.sum(dim=1).float().mean()
@@ -321,13 +330,15 @@ def accumulate_validation_isc(
     processed_samples,
     image_embeddings,
     sequence_embeddings,
-    protein_ids,
+    image_protein_ids,
+    sequence_protein_ids,
     temperature=0.07,
 ):
     batch_loss = protein_aware_isc_loss(
         image_embeddings,
         sequence_embeddings,
-        protein_ids,
+        image_protein_ids,
+        sequence_protein_ids,
         temperature=temperature,
     )
     batch_size = image_embeddings.size(0)
@@ -404,6 +415,7 @@ def _run_validation_epoch(
                     processed_val_samples,
                     image_global,
                     sequence_global,
+                    batch_protein_ids,
                     batch_protein_ids,
                     temperature=isc_temperature,
                 )
@@ -814,6 +826,7 @@ if __name__ == '__main__':
             isc_loss, mean_positives_per_anchor = training_isc_metrics(
                 image_global,
                 sequence_global,
+                batch_protein_ids,
                 batch_protein_ids,
                 temperature=isc_temperature,
             )

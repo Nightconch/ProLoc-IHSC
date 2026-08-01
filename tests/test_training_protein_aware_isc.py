@@ -117,7 +117,10 @@ def test_training_isc_uses_duplicate_ids_from_indexed_dataset_batch():
         [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
     )
     isc_loss, mean_positives_per_anchor = train.training_isc_metrics(
-        image_embeddings, sequence_embeddings, batch_protein_ids
+        image_embeddings,
+        sequence_embeddings,
+        batch_protein_ids,
+        batch_protein_ids,
     )
 
     assert batch_protein_ids == ("P53", "P53", "BRCA1")

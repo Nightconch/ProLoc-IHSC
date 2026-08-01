@@ -85,6 +85,10 @@ def split_by_protein(labels, protein_ids, n_splits=10, random_state=42):
     return train_indices, val_indices
 
 
+def _normalize_training_protein_ids(protein_ids):
+    return np.asarray(_normalize_protein_ids(protein_ids), dtype=object)
+
+
 class DeferredTee:
 
     def __init__(self, stream):
@@ -490,7 +494,7 @@ if __name__ == '__main__':
         random_state=seed,
     )
 
-    normalized_protein_ids = _normalize_protein_ids(protein_ids)
+    normalized_protein_ids = _normalize_training_protein_ids(protein_ids)
     train_protein_count = len(set(normalized_protein_ids[train_indices]))
     val_protein_count = len(set(normalized_protein_ids[val_indices]))
     train_percentage = 100.0 * len(train_indices) / num_samples

@@ -35,6 +35,39 @@ def import_train_without_feature_extractors():
 train = import_train_without_feature_extractors()
 
 
+def test_post_split_normalized_ids_support_numpy_index_selection():
+    """Break caught: a normalized Python list cannot be fancy-indexed by split arrays."""
+    protein_ids = np.repeat(
+        np.array([" P0 ", "P1", " P2", "P3 "], dtype=object), 2
+    )
+    protein_labels = np.array(
+        [
+            [1, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0],
+            [0, 1, 0, 0, 0],
+        ]
+    )
+    labels = np.repeat(protein_labels, 2, axis=0)
+    train_indices, validation_indices = train.split_by_protein(
+        labels, protein_ids, n_splits=2
+    )
+    normalize_for_training = getattr(
+        train, "_normalize_training_protein_ids", train._normalize_protein_ids
+    )
+
+    normalized_ids = normalize_for_training(protein_ids)
+    training_ids = normalized_ids[train_indices]
+    validation_ids = normalized_ids[validation_indices]
+
+    assert training_ids.tolist() == [
+        str(protein_ids[index]).strip() for index in train_indices
+    ]
+    assert validation_ids.tolist() == [
+        str(protein_ids[index]).strip() for index in validation_indices
+    ]
+
+
 def test_training_isc_uses_duplicate_ids_from_indexed_dataset_batch():
     """Break caught: dropping IDs or using diagonal ISC penalizes same-protein pairs."""
     sequence_features = np.zeros((3, 2, 2), dtype=np.float32)

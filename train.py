@@ -338,6 +338,86 @@ def accumulate_validation_isc(
     )
 
 
+def _run_validation_epoch(
+    model,
+    val_loader,
+    validation_size,
+    device,
+    threshold,
+    temperature,
+    isc_temperature,
+    isc_loss_weight,
+    label_relation_criterion,
+    focal_weight,
+    bce_weight,
+    main_loss_weight,
+    Minority_Class_loss_weight,
+    Label_Relation_loss_weight,
+    adaptive_weight,
+):
+    model.eval()
+    running_val_loss = 0.0
+    running_val_isc_loss = 0.0
+    processed_val_samples = 0
+
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc="Validation", leave=False, disable=True):
+            seq_feat, attn_mask, img_feat, label, batch_protein_ids = batch
+            seq_feat = seq_feat.to(device)
+            attn_mask = attn_mask.to(device)
+            img_feat = img_feat.to(device)
+            label = label.to(device)
+
+            preds, probs, logits = model.predict_with_adaptive_threshold(
+                image_features=img_feat,
+                sequence_features=seq_feat,
+                attention_mask=attn_mask,
+                threshold=threshold,
+            )
+
+            soft_weights = compute_adaptive_soft_weights(
+                probs, threshold=threshold, temperature=temperature
+            )
+
+            total_loss, loss_dict = multi_task_loss(
+                logits,
+                probs,
+                label,
+                adaptive_soft_weights=soft_weights,
+                label_relation_criterion=label_relation_criterion,
+                focal_weight=focal_weight,
+                bce_weight=bce_weight,
+                main_loss_weight=main_loss_weight,
+                Minority_Class_loss_weight=Minority_Class_loss_weight,
+                Label_Relation_loss_weight=Label_Relation_loss_weight,
+                adaptive_weight=adaptive_weight,
+            )
+
+            image_global, sequence_global = model.get_global_embeddings(
+                image_features=img_feat,
+                sequence_features=seq_feat,
+                attention_mask=attn_mask,
+            )
+            isc_loss, running_val_isc_loss, processed_val_samples = (
+                accumulate_validation_isc(
+                    running_val_isc_loss,
+                    processed_val_samples,
+                    image_global,
+                    sequence_global,
+                    batch_protein_ids,
+                    temperature=isc_temperature,
+                )
+            )
+            batch_size = seq_feat.size(0)
+            total_loss = total_loss + isc_loss_weight * isc_loss
+            running_val_loss += total_loss.item() * batch_size
+
+    return (
+        running_val_loss / validation_size,
+        running_val_isc_loss / processed_val_samples,
+    )
+
+
 class EarlyStopping:
     
     def __init__(self, patience=10, min_delta=0.0, verbose=True):
@@ -763,63 +843,23 @@ if __name__ == '__main__':
         epoch_Label_Relation_loss = running_Label_Relation_loss / len(train_dataset)
         
         # ==================== 验证阶段 ====================
-        model.eval()
-        running_val_loss = 0.0
-        running_val_isc_loss = 0.0
-        processed_val_samples = 0
-        
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc="Validation", leave=False, disable=True):
-                seq_feat, attn_mask, img_feat, label, batch_protein_ids = batch
-                seq_feat = seq_feat.to(device)
-                attn_mask = attn_mask.to(device)
-                img_feat = img_feat.to(device)
-                label = label.to(device)
-
-                preds, probs, logits = model.predict_with_adaptive_threshold(
-                    image_features=img_feat,
-                    sequence_features=seq_feat,
-                    attention_mask=attn_mask,
-                    threshold=threshold
-                )
-
-                # 计算软化权重
-                soft_weights = compute_adaptive_soft_weights(probs, threshold=threshold, temperature=temperature)
-
-                # 验证时也使用完整损失（包含软化策略）
-                total_loss, loss_dict = multi_task_loss(
-                    logits,  # 传入 logits
-                    probs,   # 传入 probs
-                    label,
-                    adaptive_soft_weights=soft_weights,  # 传递软化权重
-                    label_relation_criterion=label_relation_criterion,
-                    focal_weight=focal_weight,
-                    bce_weight=bce_weight,
-                    main_loss_weight=main_loss_weight,
-                    Minority_Class_loss_weight=Minority_Class_loss_weight,
-                    Label_Relation_loss_weight=Label_Relation_loss_weight,
-                    adaptive_weight=adaptive_weight  # 融合权重
-                )
-
-                image_global, sequence_global = model.get_global_embeddings(
-                    image_features=img_feat,
-                    sequence_features=seq_feat,
-                    attention_mask=attn_mask
-                )
-                batch_size = seq_feat.size(0)
-                isc_loss, running_val_isc_loss, processed_val_samples = accumulate_validation_isc(
-                    running_val_isc_loss,
-                    processed_val_samples,
-                    image_global,
-                    sequence_global,
-                    batch_protein_ids,
-                    temperature=isc_temperature,
-                )
-                total_loss = total_loss + isc_loss_weight * isc_loss
-                running_val_loss += total_loss.item() * batch_size
-
-        epoch_val_loss = running_val_loss / len(val_dataset)
-        epoch_val_isc_loss = running_val_isc_loss / processed_val_samples
+        epoch_val_loss, epoch_val_isc_loss = _run_validation_epoch(
+            model,
+            val_loader,
+            len(val_dataset),
+            device,
+            threshold,
+            temperature,
+            isc_temperature,
+            isc_loss_weight,
+            label_relation_criterion,
+            focal_weight,
+            bce_weight,
+            main_loss_weight,
+            Minority_Class_loss_weight,
+            Label_Relation_loss_weight,
+            adaptive_weight,
+        )
         
         print(f"  Train Loss: {epoch_train_loss:.4f} (Main: {epoch_main_loss:.4f}, Minority_Class: {epoch_Minority_Class_loss:.4f}, Label_Relation: {epoch_Label_Relation_loss:.4f}, isc: {epoch_train_isc_loss:.4f}, positives/anchor: {epoch_mean_positives_per_anchor:.4f})")
         print(f"  Val Loss: {epoch_val_loss:.4f}")

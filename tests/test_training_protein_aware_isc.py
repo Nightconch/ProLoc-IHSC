@@ -36,6 +36,31 @@ def import_train_without_feature_extractors():
 train = import_train_without_feature_extractors()
 
 
+class ValidationEmbeddingModel:
+    def eval(self):
+        return self
+
+    def predict_with_adaptive_threshold(
+        self,
+        image_features,
+        sequence_features,
+        attention_mask,
+        threshold,
+    ):
+        logits = torch.zeros((image_features.size(0), 5))
+        probabilities = torch.sigmoid(logits)
+        predictions = probabilities >= threshold
+        return predictions, probabilities, logits
+
+    def get_global_embeddings(
+        self,
+        image_features,
+        sequence_features,
+        attention_mask,
+    ):
+        return image_features, sequence_features.squeeze(1)
+
+
 def test_post_split_normalized_ids_support_numpy_index_selection():
     """Break caught: a normalized Python list cannot be fancy-indexed by split arrays."""
     protein_ids = np.repeat(
@@ -100,33 +125,66 @@ def test_training_isc_uses_duplicate_ids_from_indexed_dataset_batch():
     assert mean_positives_per_anchor.item() == pytest.approx(5 / 3)
 
 
-def test_validation_isc_accumulator_is_protein_aware_and_sample_weighted():
-    """Break caught: diagonal ISC or omitted final-batch accounting skews validation ISC."""
-    first_image_embeddings = torch.eye(3)
-    first_sequence_embeddings = torch.eye(3)
-    final_image_embeddings = torch.eye(2)
-    final_sequence_embeddings = torch.tensor(
-        [[0.0, 1.0], [1.0, 0.0]]
+def test_validation_epoch_isc_is_protein_aware_and_sample_weighted(monkeypatch):
+    """Break caught: validation bypasses IDs or miscounts its incomplete final batch."""
+    image_features = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    sequence_features = np.array(
+        [
+            [[1.0, 0.0, 0.0]],
+            [[0.0, 1.0, 0.0]],
+            [[0.0, 0.0, 1.0]],
+            [[0.0, 1.0, 0.0]],
+            [[1.0, 0.0, 0.0]],
+            [[0.0, 0.0, 0.0]],
+            [[0.0, 0.0, 0.0]],
+        ],
+        dtype=np.float32,
+    )
+    dataset = train.CustomDataset(
+        sequence_features,
+        np.ones((7, 1), dtype=bool),
+        image_features,
+        torch.zeros((7, 5)),
+        ["P53", "BRCA1", "EGFR", "TP53", "TP53", "unused-1", "unused-2"],
+    )
+    validation_loader = DataLoader(
+        dataset,
+        batch_size=3,
+        sampler=[0, 1, 2, 3, 4],
+    )
+    monkeypatch.setattr(
+        train, "focal_criterion", train.FocalLoss(alpha=1, gamma=2), raising=False
     )
 
-    _, weighted_loss, processed_samples = train.accumulate_validation_isc(
-        0.0,
-        0,
-        first_image_embeddings,
-        first_sequence_embeddings,
-        ("P53", "BRCA1", "EGFR"),
-        temperature=1.0,
-    )
-    _, weighted_loss, processed_samples = train.accumulate_validation_isc(
-        weighted_loss,
-        processed_samples,
-        final_image_embeddings,
-        final_sequence_embeddings,
-        ("TP53", "TP53"),
-        temperature=1.0,
+    _, epoch_isc_loss = train._run_validation_epoch(
+        ValidationEmbeddingModel(),
+        validation_loader,
+        len(dataset),
+        torch.device("cpu"),
+        threshold=0.4,
+        temperature=15.0,
+        isc_temperature=1.0,
+        isc_loss_weight=1.0,
+        label_relation_criterion=None,
+        focal_weight=4,
+        bce_weight=4,
+        main_loss_weight=3,
+        Minority_Class_loss_weight=10,
+        Label_Relation_loss_weight=2,
+        adaptive_weight=0.8,
     )
 
     expected_epoch_isc = 3 * math.log(1 + 2 * math.exp(-1)) / 5
 
-    assert processed_samples == 5
-    assert weighted_loss / processed_samples == pytest.approx(expected_epoch_isc)
+    assert epoch_isc_loss == pytest.approx(expected_epoch_isc)

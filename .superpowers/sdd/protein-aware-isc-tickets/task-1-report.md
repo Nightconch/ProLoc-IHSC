@@ -54,3 +54,48 @@ Also ran `rtk git diff --check`; it completed without output or errors.
 - With all IDs the same, numerator and denominator match in both directions, producing zero loss.
 - With unique IDs, each positive set is exactly one diagonal entry, reproducing the existing symmetric cross-entropy objective.
 - The public implementation is function-only and has no registry, configuration, compatibility layer, or training-flow changes.
+
+## Fix round 1 — numeric Protein IDs
+
+### What changed
+
+- `_normalize_protein_ids` now converts every non-missing ID to text before trimming. For example, `123` and `" 123 "` both normalize to `"123"`.
+- Added a direct behavioral test that verifies numeric IDs share the same positive relation as their trimmed text representation.
+- The deferred empty-batch Minor was intentionally not changed in this round.
+
+### TDD evidence
+
+#### RED
+
+Command:
+
+```powershell
+rtk proxy C:\Users\87279\miniconda3\envs\psl\python.exe -m pytest tests\test_protein_aware_isc.py -q
+```
+
+Result: `1 failed, 7 passed in 2.83s`. The new numeric-ID test failed for the expected reason: `ValueError: Protein ID at index 0 must be a string`.
+
+#### GREEN
+
+Command:
+
+```powershell
+rtk proxy C:\Users\87279\miniconda3\envs\psl\python.exe -m pytest tests\test_protein_aware_isc.py -q
+```
+
+Result: `8 passed in 2.75s`.
+
+### Full verification
+
+Command:
+
+```powershell
+rtk proxy C:\Users\87279\miniconda3\envs\psl\python.exe -m pytest -q
+```
+
+Result: `101 passed, 23 subtests passed in 12.35s`.
+
+### Fix self-review
+
+- Missing (`None` or `NaN`) and blank values remain explicit `ValueError` cases.
+- The change is limited to normalization; loss reduction and live training/validation loops remain unchanged.

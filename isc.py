@@ -16,10 +16,7 @@ def _normalize_protein_ids(protein_ids):
             isinstance(protein_id, float) and math.isnan(protein_id)
         ):
             raise ValueError(f"Protein ID at index {index} is missing")
-        if not isinstance(protein_id, str):
-            raise ValueError(f"Protein ID at index {index} must be a string")
-
-        normalized_id = protein_id.strip()
+        normalized_id = str(protein_id).strip()
         if not normalized_id:
             raise ValueError(f"Protein ID at index {index} is blank")
         normalized_ids.append(normalized_id)

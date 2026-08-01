@@ -25,6 +25,18 @@ def test_positive_relation_trims_ids_and_marks_all_same_protein_pairs():
     )
 
 
+def test_positive_relation_converts_numeric_ids_to_trimmed_text():
+    """Break caught: rejecting numeric IDs loses valid same-protein positives."""
+    relation = protein_positive_relation([123, " 123 ", 456])
+
+    assert torch.equal(
+        relation,
+        torch.tensor(
+            [[True, True, False], [True, True, False], [False, False, True]]
+        ),
+    )
+
+
 @pytest.mark.parametrize(
     ("protein_ids", "message"),
     [

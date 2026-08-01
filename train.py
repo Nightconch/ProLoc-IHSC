@@ -16,6 +16,7 @@ from model import CrossAttentionModel
 from metrics import compute_co_occurrence_matrix, compute_co_occurrence_matrix_cos
 from vit import ViTFeatureExtractorModel
 from prott5 import ProteinEmbeddingExtractor
+from isc import _normalize_protein_ids, protein_aware_isc_loss, protein_positive_relation
 
 
 # ==================== 设置随机种子函数 ====================
@@ -264,11 +265,22 @@ def isc_contrastive_loss(image_embeddings, sequence_embeddings, temperature=0.07
 
 
 class CustomDataset(Dataset):
-    def __init__(self, seq_features, attention_masks, img_features, labels, indices=None):
+    def __init__(
+        self,
+        seq_features,
+        attention_masks,
+        img_features,
+        labels,
+        protein_ids,
+        indices=None,
+    ):
         self.seq_features = seq_features
         self.attention_masks = attention_masks
         self.img_features = img_features
         self.labels = labels
+        if len(protein_ids) != len(labels):
+            raise ValueError("protein_ids and labels must contain the same number of samples")
+        self.protein_ids = _normalize_protein_ids(protein_ids)
         self.indices = indices  # 如果提供了索引，使用索引访问数据
         
         # 如果提供了索引，使用索引的长度；否则使用标签的长度
@@ -287,6 +299,7 @@ class CustomDataset(Dataset):
         attn_mask = np.array(self.attention_masks[actual_idx], dtype=bool)
         img_feat = np.array(self.img_features[actual_idx], dtype=np.float32)
         label = self.labels[actual_idx]
+        protein_id = self.protein_ids[actual_idx]
         
         # 转换为torch tensor
         seq_feat = torch.from_numpy(seq_feat).float()
@@ -294,7 +307,21 @@ class CustomDataset(Dataset):
         img_feat = torch.from_numpy(img_feat).float()
         
         # label已经是tensor，不需要转换
-        return seq_feat, attn_mask, img_feat, label
+        return seq_feat, attn_mask, img_feat, label, protein_id
+
+
+def training_isc_metrics(
+    image_embeddings, sequence_embeddings, protein_ids, temperature=0.07
+):
+    positive_relation = protein_positive_relation(protein_ids)
+    isc_loss = protein_aware_isc_loss(
+        image_embeddings,
+        sequence_embeddings,
+        protein_ids,
+        temperature=temperature,
+    )
+    mean_positives_per_anchor = positive_relation.sum(dim=1).float().mean()
+    return isc_loss, mean_positives_per_anchor
 
 
 class EarlyStopping:
@@ -463,7 +490,7 @@ if __name__ == '__main__':
         random_state=seed,
     )
 
-    normalized_protein_ids = protein_ids.astype(str).str.strip().to_numpy()
+    normalized_protein_ids = _normalize_protein_ids(protein_ids)
     train_protein_count = len(set(normalized_protein_ids[train_indices]))
     val_protein_count = len(set(normalized_protein_ids[val_indices]))
     train_percentage = 100.0 * len(train_indices) / num_samples
@@ -498,6 +525,7 @@ if __name__ == '__main__':
         attention_masks,  
         img_features,
         labels, 
+        normalized_protein_ids,
         indices=train_indices  
     )
     
@@ -506,6 +534,7 @@ if __name__ == '__main__':
         attention_masks,
         img_features,  
         labels, 
+        normalized_protein_ids,
         indices=val_indices  
     )
     
@@ -635,6 +664,7 @@ if __name__ == '__main__':
     train_Minority_Class_losses = []
     train_Label_Relation_losses = []
     train_isc_losses = []
+    train_mean_positives_per_anchor = []
     val_isc_losses = []
 
 
@@ -646,10 +676,11 @@ if __name__ == '__main__':
         running_Minority_Class_loss = 0.0
         running_Label_Relation_loss = 0.0
         running_isc_loss = 0.0
+        running_mean_positives_per_anchor = 0.0
         print(f"Epoch {epoch + 1}/{max_epochs}")
 
         for batch in tqdm(train_loader, desc="Training", leave=False, disable=True):
-            seq_feat, attn_mask, img_feat, label = batch
+            seq_feat, attn_mask, img_feat, label, batch_protein_ids = batch
             seq_feat = seq_feat.to(device)
             attn_mask = attn_mask.to(device)
             img_feat = img_feat.to(device)
@@ -686,7 +717,12 @@ if __name__ == '__main__':
                 sequence_features=seq_feat,
                 attention_mask=attn_mask
             )
-            isc_loss = isc_contrastive_loss(image_global, sequence_global, temperature=isc_temperature)
+            isc_loss, mean_positives_per_anchor = training_isc_metrics(
+                image_global,
+                sequence_global,
+                batch_protein_ids,
+                temperature=isc_temperature,
+            )
             total_loss = total_loss + isc_loss_weight * isc_loss
 
             # 反向传播和优化
@@ -696,12 +732,18 @@ if __name__ == '__main__':
 
             running_train_loss += total_loss.item() * seq_feat.size(0)
             running_isc_loss += isc_loss.item() * seq_feat.size(0)
+            running_mean_positives_per_anchor += (
+                mean_positives_per_anchor.item() * seq_feat.size(0)
+            )
             running_main_loss += loss_dict['main'].item() * seq_feat.size(0)
             running_Minority_Class_loss += loss_dict['Minority_Class'].item() * seq_feat.size(0)
             running_Label_Relation_loss += loss_dict['Label_Relation'].item() * seq_feat.size(0)
 
         epoch_train_loss = running_train_loss / len(train_dataset)
         epoch_train_isc_loss = running_isc_loss / len(train_dataset)
+        epoch_mean_positives_per_anchor = (
+            running_mean_positives_per_anchor / len(train_dataset)
+        )
         epoch_main_loss = running_main_loss / len(train_dataset)
         epoch_Minority_Class_loss = running_Minority_Class_loss / len(train_dataset)
         epoch_Label_Relation_loss = running_Label_Relation_loss / len(train_dataset)
@@ -713,7 +755,7 @@ if __name__ == '__main__':
         
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validation", leave=False, disable=True):
-                seq_feat, attn_mask, img_feat, label = batch
+                seq_feat, attn_mask, img_feat, label, batch_protein_ids = batch
                 seq_feat = seq_feat.to(device)
                 attn_mask = attn_mask.to(device)
                 img_feat = img_feat.to(device)
@@ -757,7 +799,7 @@ if __name__ == '__main__':
         epoch_val_loss = running_val_loss / len(val_dataset)
         epoch_val_isc_loss = running_val_isc_loss / len(val_dataset)
         
-        print(f"  Train Loss: {epoch_train_loss:.4f} (Main: {epoch_main_loss:.4f}, Minority_Class: {epoch_Minority_Class_loss:.4f}, Label_Relation: {epoch_Label_Relation_loss:.4f}, isc: {epoch_train_isc_loss:.4f})")
+        print(f"  Train Loss: {epoch_train_loss:.4f} (Main: {epoch_main_loss:.4f}, Minority_Class: {epoch_Minority_Class_loss:.4f}, Label_Relation: {epoch_Label_Relation_loss:.4f}, isc: {epoch_train_isc_loss:.4f}, positives/anchor: {epoch_mean_positives_per_anchor:.4f})")
         print(f"  Val Loss: {epoch_val_loss:.4f}")
         
         # 记录损失值
@@ -767,6 +809,7 @@ if __name__ == '__main__':
         train_Minority_Class_losses.append(epoch_Minority_Class_loss)
         train_Label_Relation_losses.append(epoch_Label_Relation_loss)
         train_isc_losses.append(epoch_train_isc_loss)
+        train_mean_positives_per_anchor.append(epoch_mean_positives_per_anchor)
         val_isc_losses.append(epoch_val_isc_loss)
 
         # 检查早停
@@ -802,6 +845,7 @@ if __name__ == '__main__':
         'train_Minority_Class_loss': train_Minority_Class_losses,
         'train_Label_Relation_loss': train_Label_Relation_losses,
         'train_isc_loss': train_isc_losses,
+        'train_mean_positives_per_anchor': train_mean_positives_per_anchor,
         'val_isc_loss': val_isc_losses
     })
     history_csv_path = f"{results_dir}/training_history_label_relation_prot5.csv"

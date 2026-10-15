@@ -1,0 +1,1 @@
+Download ProtT5-XL-UniRef50 from ProtTrans and place it in the prot5/ directory.
